@@ -1,0 +1,39 @@
+{
+  "discord_webhook_url": "",
+  "enable_termux_notification": true,
+  "min_upside_for_buy_pct": 5.0,
+  "rsi_overbought": 72.0,
+  "rsi_oversold": 30.0,
+  "notify_on": [
+    "STRONG BUY",
+    "BUY",
+    "STRONG SELL",
+    "SELL"
+  ],
+  "watchlist_india": [
+    "RELIANCE.NS",
+    "TCS.NS",
+    "HDFCBANK.NS",
+    "INFY.NS",
+    "ICICIBANK.NS",
+    "BHARTIARTL.NS",
+    "SBIN.NS",
+    "LT.NS",
+    "ITC.NS",
+    "AXISBANK.NS",
+    "SUNPHARMA.NS",
+    "MARUTI.NS"
+  ],
+  "watchlist_us": [
+    "NVDA",
+    "AAPL",
+    "MSFT",
+    "TSLA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "AMD",
+    "SPY",
+    "QQQ"
+  ]
+}
