@@ -2,6 +2,8 @@
 import os
 import sys
 import json
+import time
+import threading
 import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,7 +11,7 @@ from typing import Dict, Any, Optional, List
 
 from market_client import MarketClient
 from strategy import IndicatorStrategy
-from notifier import Notifier
+from notifier import Notifier, get_alert_history
 from ai_assistant import AIAssistant
 
 PORT = 5000
@@ -19,6 +21,7 @@ def load_config() -> Dict[str, Any]:
     default_cfg = {
         "discord_webhook_url": "",
         "enable_termux_notification": True,
+        "auto_monitor_enabled": True,
         "min_upside_for_buy_pct": 5.0,
         "rsi_overbought": 72.0,
         "rsi_oversold": 30.0,
@@ -55,6 +58,50 @@ strategy = IndicatorStrategy(
 ai_assistant = AIAssistant()
 
 cached_results: Dict[str, Any] = {}
+auto_monitor_enabled = config.get("auto_monitor_enabled", True)
+alerted_triggers = set()
+
+def background_market_monitor_loop():
+    """Background daemon that periodically scans watchlists and dispatches Buy and Sell alerts."""
+    while True:
+        try:
+            if auto_monitor_enabled:
+                notifier = Notifier(discord_webhook_url=config.get("discord_webhook_url"))
+                all_syms = config.get("watchlist_us", []) + config.get("watchlist_india", [])
+                for s in all_syms:
+                    if not auto_monitor_enabled:
+                        break
+                    try:
+                        resolved = client.resolve_symbol(s)
+                        raw = client.get_full_analysis(resolved)
+                        if raw and raw.get("analyst"):
+                            res = strategy.analyze(raw)
+                            cached_results[res["symbol"]] = res
+                            triggers = res.get("triggers", {})
+                            buy_t = triggers.get("buy", {})
+                            sell_t = triggers.get("sell", {})
+
+                            if buy_t.get("triggered"):
+                                key = (res["symbol"], "BUY")
+                                if key not in alerted_triggers:
+                                    notifier.send_trade_alert(res, "BUY")
+                                    alerted_triggers.add(key)
+                            else:
+                                alerted_triggers.discard((res["symbol"], "BUY"))
+
+                            if sell_t.get("triggered"):
+                                key = (res["symbol"], sell_t.get("type", "SELL"))
+                                if key not in alerted_triggers:
+                                    notifier.send_trade_alert(res, "SELL")
+                                    alerted_triggers.add(key)
+                            else:
+                                for st in ["TAKE_PROFIT_1", "TAKE_PROFIT_2", "STOP_LOSS_HIT", "OVERBOUGHT_TRIM", "BEARISH_BREAKDOWN"]:
+                                    alerted_triggers.discard((res["symbol"], st))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        time.sleep(180)
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -201,6 +248,231 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     button.primary:hover {
       background: #2563eb;
+    }
+
+    /* Macro Market Regime Section */
+    .macro-section {
+      margin-bottom: 16px;
+    }
+    .macro-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .macro-regime-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .macro-regime-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+    .macro-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--yellow);
+      display: inline-block;
+      box-shadow: 0 0 8px currentColor;
+    }
+    .macro-meta-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .macro-guidance {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .macro-indices {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .macro-idx-chip {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 6px;
+    }
+    .macro-idx-name {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .macro-idx-val {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Actionable Buy / Sell Trigger Cards */
+    .triggers-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 768px) {
+      .triggers-grid { grid-template-columns: 1fr; }
+    }
+    .trigger-card {
+      background: #0d111b;
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .trigger-card.buy-card {
+      border-left: 4px solid var(--green);
+      background: linear-gradient(180deg, rgba(16,185,129,0.05) 0%, rgba(13,17,27,1) 100%);
+    }
+    .trigger-card.sell-card {
+      border-left: 4px solid var(--red);
+      background: linear-gradient(180deg, rgba(239,68,68,0.05) 0%, rgba(13,17,27,1) 100%);
+    }
+    .trigger-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .trigger-badge {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .trigger-badge.buy { color: var(--green); }
+    .trigger-badge.sell { color: var(--red); }
+    .trigger-status {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.08);
+      font-weight: 600;
+    }
+    .trigger-content {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #e2e8f0;
+      margin-bottom: 10px;
+    }
+    .trigger-meta {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .trigger-action-btn {
+      width: 100%;
+      padding: 7px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid transparent;
+      font-family: var(--font-sans);
+    }
+    .trigger-action-btn.buy-btn {
+      background: rgba(16,185,129,0.15);
+      color: var(--green);
+      border-color: rgba(16,185,129,0.3);
+    }
+    .trigger-action-btn.buy-btn:hover {
+      background: rgba(16,185,129,0.25);
+    }
+    .trigger-action-btn.sell-btn {
+      background: rgba(239,68,68,0.15);
+      color: var(--red);
+      border-color: rgba(239,68,68,0.3);
+    }
+    .trigger-action-btn.sell-btn:hover {
+      background: rgba(239,68,68,0.25);
+    }
+
+    /* Alerts Drawer */
+    .alerts-drawer {
+      position: fixed;
+      top: 60px;
+      right: 20px;
+      width: 360px;
+      max-width: calc(100vw - 32px);
+      max-height: 500px;
+      background: #111522;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+      z-index: 1000;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .alerts-header {
+      background: #181e2f;
+      padding: 10px 14px;
+      border-bottom: 1px solid #242c3f;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .alerts-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .alert-card-item {
+      background: #181d2a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+    }
+    .alert-card-item.buy { border-left: 3px solid var(--green); }
+    .alert-card-item.sell { border-left: 3px solid var(--red); }
+    .alert-item-top {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 700;
+      margin-bottom: 3px;
+    }
+    .alert-item-time {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
     }
 
     /* Search Box & Quick Pills */
@@ -737,13 +1009,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <h1>Quantitative AI Market Terminal</h1>
       </div>
       <div class="header-actions">
-        <button onclick="rescanActiveMarket()" class="primary">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-          Rescan Watchlist
+        <button onclick="scanAndNotifyAll()" class="primary" style="background: #10b981; border-color: #10b981;" title="Scan market now and send Buy/Sell alerts">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          ⚡ Scan & Send Buy/Sell Alerts
         </button>
-        <button onclick="sendPhonePush()">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-          Phone Alert
+        <button onclick="toggleAutoMonitor()" id="btnAutoMonitor" style="border-color: #334155;">
+          🔔 Auto-Alerts: ON
+        </button>
+        <button onclick="toggleAlertsDrawer()" id="btnAlertsBell" style="position: relative;">
+          🔔 Alert Log
+          <span id="alertBellBadge" style="display:none; background:#ef4444; color:#fff; border-radius:10px; font-size:10px; padding:1px 5px; font-weight:700; margin-left:4px;">0</span>
+        </button>
+        <button onclick="rescanActiveMarket()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          Rescan
         </button>
       </div>
     </header>
@@ -755,6 +1034,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div class="market-tab" id="tabIN" onclick="switchMarket('IN')">
         <span>🇮🇳 Indian Market (NSE / BSE)</span>
+      </div>
+    </div>
+
+    <!-- Macro Market Regime & Broad Market Analysis -->
+    <div class="macro-section" id="macroSection">
+      <div class="macro-banner" id="macroBanner">
+        <div class="macro-regime-row">
+          <div class="macro-regime-badge" id="macroRegimeBadge">
+            <span class="macro-dot" id="macroDot"></span>
+            <span id="macroRegimeText">ANALYZING CURRENT MARKET REGIME...</span>
+          </div>
+          <div class="macro-meta-actions">
+            <span id="macroUpdateTime" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Scanning...</span>
+            <button class="macro-btn" onclick="fetchMarketOverview(true)" style="padding: 3px 8px; font-size: 11px;">↻ Refresh Market</button>
+          </div>
+        </div>
+
+        <p class="macro-guidance" id="macroGuidance">Evaluating market-wide breadth, index trend lines, and volatility index...</p>
+
+        <div class="macro-indices" id="macroIndices">
+          <!-- Populated by JS -->
+        </div>
       </div>
     </div>
 
@@ -869,7 +1170,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
 
-        <p id="rationaleText" style="font-size: 12px; color: var(--text-muted); line-height: 1.6;"></p>
+        <!-- Actionable Buy & Sell Execution Rules -->
+        <div class="card-title"><span>Actionable Buy & Sell Execution Rules</span></div>
+        <div class="triggers-grid">
+          <div class="trigger-card buy-card" id="triggerBuyCard">
+            <div class="trigger-top">
+              <span class="trigger-badge buy">🟢 WHEN TO BUY</span>
+              <span class="trigger-status" id="triggerBuyAction">ACCUMULATE ON DIP</span>
+            </div>
+            <div class="trigger-content" id="triggerBuyInstruction">
+              Enter between $226.04–$229.66. Stop-Loss at $219.41 (-3.96%). Target TP1: $241.72 (+5.81%).
+            </div>
+            <div class="trigger-meta" id="triggerBuyMeta">
+              <span>Risk:Reward: <strong id="triggerBuyRR">1:1.5</strong></span>
+              <span>Confluence: <strong id="triggerBuyScore">92/100</strong></span>
+            </div>
+            <button class="trigger-action-btn buy-btn" onclick="dispatchDirectTradeAlert('BUY')">
+              ⚡ Send Buy Alert to Phone & Discord
+            </button>
+          </div>
+
+          <div class="trigger-card sell-card" id="triggerSellCard">
+            <div class="trigger-top">
+              <span class="trigger-badge sell">🔴 WHEN TO SELL</span>
+              <span class="trigger-status" id="triggerSellAction">HOLD FOR TARGET</span>
+            </div>
+            <div class="trigger-content" id="triggerSellInstruction">
+              Sell 50% at TP1 to lock gains. Hold remainder for TP2. Immediate exit if price drops to Stop Loss.
+            </div>
+            <div class="trigger-meta" id="triggerSellMeta">
+              <span>TP1 Target: <strong id="triggerSellTP1">-</strong></span>
+              <span>SL Cutoff: <strong id="triggerSellSL">-</strong></span>
+            </div>
+            <button class="trigger-action-btn sell-btn" onclick="dispatchDirectTradeAlert('SELL')">
+              ⚡ Send Sell Alert to Phone & Discord
+            </button>
+          </div>
+        </div>
+
+        <p id="rationaleText" style="font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-top: 10px;"></p>
       </div>
 
       <!-- Right Column: Gauge & Actions -->
@@ -973,6 +1312,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <div class="toast" id="toastMsg">Notification dispatched!</div>
 
+  <!-- ALERT HISTORY MODAL / DRAWER -->
+  <div class="alerts-drawer" id="alertsDrawer">
+    <div class="alerts-header">
+      <div style="font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+        <span>🔔 Recent Buy & Sell Alerts</span>
+      </div>
+      <button onclick="toggleAlertsDrawer()" style="background: none; border: none; color: #94a3b8; font-size: 16px; cursor: pointer;">✕</button>
+    </div>
+    <div class="alerts-list" id="alertsList">
+      <div style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 12px;">No alerts recorded yet. Click "⚡ Scan & Send Buy/Sell Alerts" to scan the market.</div>
+    </div>
+  </div>
+
   <script>
     let currentMarket = 'US';
     let activeResult = null;
@@ -1043,6 +1395,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ? 'Search any US stock (e.g. NVDA, AAPL, TSLA, MSFT, SPY)' 
         : 'Search any Indian stock (e.g. RELIANCE, TCS, HDFCBANK, INFY)';
       updatePills();
+      fetchMarketOverview(false);
       const defaultTicker = market === 'US' ? 'NVDA' : 'RELIANCE.NS';
       analyzeSpecific(defaultTicker);
       scanMarketWatchlist(false);
@@ -1119,6 +1472,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('execATR').innerText = cSign + (ex.atr || 0).toFixed(2);
 
       document.getElementById('rationaleText').innerText = data.rationale || '';
+
+      // Actionable Buy & Sell Triggers
+      const trigs = data.triggers || {};
+      const buyT = trigs.buy || {};
+      const sellT = trigs.sell || {};
+
+      document.getElementById('triggerBuyAction').innerText = buyT.action || 'ACCUMULATE ON DIP';
+      document.getElementById('triggerBuyInstruction').innerText = buyT.instruction || 'Wait for setup confirmation.';
+      document.getElementById('triggerBuyRR').innerText = '1 : ' + (ex.risk_reward_tp1 || 0);
+      document.getElementById('triggerBuyScore').innerText = (data.score || 0) + '/100';
+
+      document.getElementById('triggerSellAction').innerText = sellT.action || 'HOLD';
+      document.getElementById('triggerSellInstruction').innerText = sellT.instruction || 'Follow exit targets.';
+      document.getElementById('triggerSellTP1').innerText = cSign + (ex.take_profit_1 || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
+      document.getElementById('triggerSellSL').innerText = cSign + (ex.stop_loss || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
 
       // Gauge
       const score = data.score || 50;
@@ -1218,6 +1586,193 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         body: JSON.stringify({symbol: activeResult.symbol, only_phone: true})
       });
       showToast('Notification sent to Android device status bar!');
+    }
+
+    /* AUDIO & WEB PUSH NOTIFICATIONS */
+    function playNotificationSound() {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      } catch (e) {}
+    }
+
+    function requestNotificationPermission() {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+
+    function triggerWebNotification(title, body) {
+      playNotificationSound();
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification(title, {
+            body: body,
+            icon: 'https://img.icons8.com/color/512/bullish.png',
+            tag: 'stock_signal'
+          });
+        } catch (e) {}
+      }
+    }
+
+    /* MACRO MARKET REGIME FUNCTIONS */
+    async function fetchMarketOverview(force = false) {
+      if (force) showToast('Analyzing broad market regime...');
+      try {
+        const res = await fetch('/api/market-overview?market=' + currentMarket);
+        const data = await res.json();
+        if (data && data.regime) {
+          renderMarketOverview(data);
+          if (force) showToast('Market regime analysis updated!');
+        }
+      } catch (e) {
+        console.error('Market overview error:', e);
+      }
+    }
+
+    function renderMarketOverview(data) {
+      document.getElementById('macroRegimeText').innerText = data.regime;
+      const dot = document.getElementById('macroDot');
+      dot.style.background = data.color || '#f59e0b';
+      dot.style.boxShadow = '0 0 10px ' + (data.color || '#f59e0b');
+      document.getElementById('macroGuidance').innerText = data.guidance;
+      document.getElementById('macroUpdateTime').innerText = 'Live ' + data.updated_at;
+
+      const container = document.getElementById('macroIndices');
+      container.innerHTML = '';
+      (data.indices || []).forEach(idx => {
+        const chip = document.createElement('div');
+        chip.className = 'macro-idx-chip';
+        const cSign = idx.currency === 'USD' ? '$' : (idx.currency === 'INR' ? '₹' : '');
+        const chg = idx.change_pct || 0;
+        const chgClass = chg >= 0 ? 'positive' : 'negative';
+        chip.innerHTML = `
+          <div class="macro-idx-name">
+            <span>${idx.name}</span>
+            <span style="color:${idx.status === 'Bullish' ? 'var(--green)' : (idx.status === 'Bearish' ? 'var(--red)' : 'var(--yellow)')}; font-weight:600;">${idx.status}</span>
+          </div>
+          <div class="macro-idx-val">
+            <span>${cSign}${(idx.price || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+            <span class="${chgClass}" style="font-size:11px;">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>
+          </div>
+        `;
+        container.appendChild(chip);
+      });
+    }
+
+    /* TRADE ALERT & DISPATCH FUNCTIONS */
+    async function scanAndNotifyAll() {
+      requestNotificationPermission();
+      showToast('Scanning all ' + currentMarket + ' stocks for active Buy/Sell triggers...');
+      try {
+        const res = await fetch('/api/scan-and-notify', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({market: currentMarket})
+        });
+        const data = await res.json();
+        const count = data.alerts_count || 0;
+        if (count > 0) {
+          showToast(`⚡ ${count} Buy/Sell alert(s) triggered & delivered to Phone/Discord!`);
+          triggerWebNotification('🚨 Actionable Trade Alert', `${count} stock(s) triggered Buy or Sell conditions!`);
+          fetchAlertsHistory();
+        } else {
+          showToast(`Scan complete. All tickers in consolidation/hold range.`);
+        }
+      } catch (e) {
+        showToast('Scan error: ' + e);
+      }
+    }
+
+    async function dispatchDirectTradeAlert(type) {
+      if (!activeResult) return;
+      requestNotificationPermission();
+      showToast(`Dispatching ${type} alert for ${activeResult.symbol}...`);
+      try {
+        const res = await fetch('/api/trade-alert', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({symbol: activeResult.symbol, type: type})
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ ${type} alert dispatched to Phone & Discord!`);
+          triggerWebNotification(`🚨 [${type} ALERT] ${activeResult.symbol}`, data.alert ? data.alert.content : `${type} alert executed.`);
+          fetchAlertsHistory();
+        } else {
+          showToast('Failed to dispatch alert.');
+        }
+      } catch (e) {
+        showToast('Error: ' + e);
+      }
+    }
+
+    let autoMonitorState = true;
+    async function toggleAutoMonitor() {
+      autoMonitorState = !autoMonitorState;
+      const btn = document.getElementById('btnAutoMonitor');
+      btn.innerText = '🔔 Auto-Alerts: ' + (autoMonitorState ? 'ON' : 'OFF');
+      btn.style.color = autoMonitorState ? '#10b981' : '#94a3b8';
+      await fetch('/api/auto-monitor', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled: autoMonitorState})
+      });
+      showToast('Auto-Monitor ' + (autoMonitorState ? 'Enabled (Every 3 mins)' : 'Disabled'));
+    }
+
+    function toggleAlertsDrawer() {
+      const drawer = document.getElementById('alertsDrawer');
+      if (drawer.style.display === 'flex') {
+        drawer.style.display = 'none';
+      } else {
+        drawer.style.display = 'flex';
+        fetchAlertsHistory();
+      }
+    }
+
+    async function fetchAlertsHistory() {
+      try {
+        const res = await fetch('/api/alerts?limit=25');
+        const list = await res.json();
+        const container = document.getElementById('alertsList');
+        const badge = document.getElementById('alertBellBadge');
+
+        if (!list || list.length === 0) {
+          container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 12px;">No alerts recorded yet. Click "⚡ Scan & Send Buy/Sell Alerts" to scan the market.</div>';
+          badge.style.display = 'none';
+          return;
+        }
+
+        badge.innerText = list.length;
+        badge.style.display = 'inline-block';
+        container.innerHTML = '';
+
+        list.forEach(a => {
+          const item = document.createElement('div');
+          item.className = 'alert-card-item ' + (a.type || 'buy').toLowerCase();
+          item.innerHTML = `
+            <div class="alert-item-top">
+              <span style="color: ${a.type === 'BUY' ? 'var(--green)' : (a.type === 'SELL' ? 'var(--red)' : 'var(--yellow)')};">${a.title}</span>
+              <span class="alert-item-time">${a.timestamp}</span>
+            </div>
+            <div style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">${a.content}</div>
+          `;
+          container.appendChild(item);
+        });
+      } catch (e) {}
     }
 
     async function loadConfig() {
@@ -1323,6 +1878,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // Startup
     loadConfig();
     switchMarket('US');
+    fetchMarketOverview(false);
+    fetchAlertsHistory();
+    setInterval(fetchAlertsHistory, 15000);
+    setInterval(() => fetchMarketOverview(false), 60000);
   </script>
 </body>
 </html>
@@ -1399,6 +1958,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             results.sort(key=lambda x: x.get("score", 0), reverse=True)
             self.send_json(results)
 
+        elif path == "/api/market-overview":
+            market = query.get("market", ["US"])[0].upper()
+            overview = client.get_market_overview(market)
+            self.send_json(overview)
+
+        elif path == "/api/alerts":
+            limit = int(query.get("limit", [50])[0])
+            self.send_json(get_alert_history(limit))
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -1468,11 +2036,75 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json({"error": "Symbol not analyzed yet"}, 400)
 
+        elif path == "/api/trade-alert":
+            symbol = payload.get("symbol", "")
+            alert_type = payload.get("type", "BUY").upper()
+            if not symbol or symbol not in cached_results:
+                resolved = client.resolve_symbol(symbol)
+                raw = client.get_full_analysis(resolved)
+                if raw and raw.get("analyst"):
+                    cached_results[resolved] = strategy.analyze(raw)
+                    symbol = resolved
+            if symbol in cached_results:
+                notifier = Notifier(discord_webhook_url=config.get("discord_webhook_url"))
+                res = notifier.send_trade_alert(cached_results[symbol], alert_type)
+                self.send_json(res)
+            else:
+                self.send_json({"error": "Symbol not analyzed yet"}, 400)
+
+        elif path == "/api/scan-and-notify":
+            market = payload.get("market", "US").upper()
+            symbols = config.get("watchlist_us", []) if market == "US" else config.get("watchlist_india", [])
+            notifier = Notifier(discord_webhook_url=config.get("discord_webhook_url"))
+            alerts_triggered = []
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_sym = {executor.submit(client.get_full_analysis, s): s for s in symbols}
+                for future in as_completed(future_to_sym):
+                    try:
+                        raw = future.result()
+                        if raw and raw.get("analyst"):
+                            res = strategy.analyze(raw)
+                            cached_results[res["symbol"]] = res
+                            triggers = res.get("triggers", {})
+                            buy_t = triggers.get("buy", {})
+                            sell_t = triggers.get("sell", {})
+
+                            if buy_t.get("triggered"):
+                                out = notifier.send_trade_alert(res, "BUY")
+                                if out.get("alert"):
+                                    alerts_triggered.append(out["alert"])
+                            elif sell_t.get("triggered"):
+                                out = notifier.send_trade_alert(res, "SELL")
+                                if out.get("alert"):
+                                    alerts_triggered.append(out["alert"])
+                    except Exception:
+                        pass
+
+            self.send_json({
+                "market": market,
+                "scanned_count": len(symbols),
+                "alerts_count": len(alerts_triggered),
+                "alerts": alerts_triggered
+            })
+
+        elif path == "/api/auto-monitor":
+            global auto_monitor_enabled
+            enabled = payload.get("enabled", True)
+            auto_monitor_enabled = enabled
+            config["auto_monitor_enabled"] = enabled
+            save_config(config)
+            self.send_json({"auto_monitor_enabled": auto_monitor_enabled})
+
         else:
             self.send_response(404)
             self.end_headers()
 
 def run_server(port: int = PORT):
+    # Start background market monitor daemon thread
+    monitor_thread = threading.Thread(target=background_market_monitor_loop, daemon=True)
+    monitor_thread.start()
+
     server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     print(f"\n=======================================================")
     print(f"🚀 AI Market Terminal & Chatbot Live on Localhost!")

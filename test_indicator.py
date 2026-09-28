@@ -103,5 +103,34 @@ class TestIndianStockIndicator(unittest.TestCase):
         self.assertIn(res_sell["signal"], ["SELL", "STRONG SELL"])
         self.assertLessEqual(res_sell["score"], 45)
 
+    def test_buy_and_sell_triggers(self):
+        strategy = IndicatorStrategy()
+        data_buy = {
+            "symbol": "NVDA",
+            "analyst": {"current_price": 200.0, "target_mean_price": 280.0, "upside_pct": 40.0, "currency": "USD"},
+            "technical": {
+                "latest_close": 200.0, "rsi_14": 55.0, "trend_above_ema200": True,
+                "trend_above_ema21": True, "trend_above_ema9": True, "ema_alignment_bullish": True,
+                "macd_bullish": True, "macd_expanding": True, "atr_14": 6.0, "rvol": 1.5
+            }
+        }
+        res = strategy.analyze(data_buy)
+        self.assertIn("triggers", res)
+        triggers = res["triggers"]
+        self.assertIn("buy", triggers)
+        self.assertIn("sell", triggers)
+        self.assertTrue(triggers["buy"]["triggered"])
+        self.assertIn("WHEN TO BUY", triggers["buy"]["instruction"])
+        self.assertIn("WHEN TO SELL", triggers["sell"]["instruction"])
+
+    def test_market_overview_structure(self):
+        client = MarketClient()
+        overview = client.get_market_overview("US")
+        self.assertIn("regime", overview)
+        self.assertIn("bias", overview)
+        self.assertIn("guidance", overview)
+        self.assertIn("indices", overview)
+        self.assertGreater(len(overview["indices"]), 0)
+
 if __name__ == "__main__":
     unittest.main()

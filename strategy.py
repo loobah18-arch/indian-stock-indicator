@@ -224,6 +224,51 @@ class IndicatorStrategy:
         curr_sym = "$" if currency == "USD" else "₹"
         entry_zone = f"{curr_sym}{entry_low:,.2f} – {curr_sym}{entry_high:,.2f}"
 
+        # Actionable Buy / Sell Triggers
+        buy_active = (signal in ["STRONG BUY", "BUY"]) and (not is_overbought) and (current_price <= entry_high * 1.015)
+        buy_trigger = {
+            "triggered": bool(buy_active),
+            "type": "BUY" if buy_active else "NONE",
+            "action": "BUY IN ZONE" if (entry_low <= current_price <= entry_high) else ("ACCUMULATE ON DIP" if buy_active else "WAIT FOR SETUP"),
+            "entry_range": entry_zone,
+            "stop_loss": f"{curr_sym}{stop_loss:,.2f} (-{sl_risk_pct}%)",
+            "take_profit_1": f"{curr_sym}{take_profit_1:,.2f} (+{tp1_gain_pct}%)",
+            "take_profit_2": f"{curr_sym}{take_profit_2:,.2f} (+{tp2_gain_pct}%)",
+            "instruction": f"🟢 WHEN TO BUY: Enter between {curr_sym}{entry_low:,.2f}–{curr_sym}{entry_high:,.2f}. SL at {curr_sym}{stop_loss:,.2f} (-{sl_risk_pct}%). Target TP1: {curr_sym}{take_profit_1:,.2f} (+{tp1_gain_pct}%)." if buy_active else "Wait for confluence score >= 65 and entry zone retest before opening new long."
+        }
+
+        sell_reason = None
+        sell_action = "HOLD"
+        sell_type = "NONE"
+        if current_price >= take_profit_2 and take_profit_2 > 0:
+            sell_type = "TAKE_PROFIT_2"
+            sell_action = "SELL ALL (TP2 TARGET HIT)"
+            sell_reason = f"Price reached secondary analyst target of {curr_sym}{take_profit_2:,.2f} (+{tp2_gain_pct}%). Secure full profits."
+        elif current_price >= take_profit_1 and take_profit_1 > 0:
+            sell_type = "TAKE_PROFIT_1"
+            sell_action = "SELL 50% (TP1 SWING HIT)"
+            sell_reason = f"Price reached swing target {curr_sym}{take_profit_1:,.2f} (+{tp1_gain_pct}%). Trim 50% profits and move SL to breakeven."
+        elif current_price <= stop_loss and stop_loss > 0:
+            sell_type = "STOP_LOSS_HIT"
+            sell_action = "EXIT ALL (STOP LOSS BREACHED)"
+            sell_reason = f"Price dropped below stop loss {curr_sym}{stop_loss:,.2f} (-{sl_risk_pct}%). Exit immediately to preserve capital."
+        elif rsi and rsi >= 75.0:
+            sell_type = "OVERBOUGHT_TRIM"
+            sell_action = "TRIM PROFITS (EXTREME OVERBOUGHT)"
+            sell_reason = f"Wilder RSI reached {rsi:.1f} (overbought). Take partial profits or tighten trailing stop."
+        elif signal in ["SELL", "STRONG SELL"]:
+            sell_type = "BEARISH_BREAKDOWN"
+            sell_action = "EXIT / AVOID"
+            sell_reason = f"Technical confluence breakdown with score of {total_score}/100. Trend is hostile."
+
+        sell_trigger = {
+            "triggered": sell_type != "NONE",
+            "type": sell_type,
+            "action": sell_action,
+            "reason": sell_reason,
+            "instruction": f"🔴 WHEN TO SELL: {sell_reason}" if sell_reason else f"🔴 WHEN TO SELL: Exit at {curr_sym}{take_profit_1:,.2f} (TP1: +{tp1_gain_pct}%) to lock gains, or cut at {curr_sym}{stop_loss:,.2f} (SL: -{sl_risk_pct}%) if price reverses."
+        }
+
         # Analytical Rationale
         notes = []
         if total_score >= 65:
@@ -264,6 +309,10 @@ class IndicatorStrategy:
             "recommendation_key": rec_key,
             "analyst_count": analyst_count,
             "breakdown": breakdown,
+            "triggers": {
+                "buy": buy_trigger,
+                "sell": sell_trigger,
+            },
             "execution": {
                 "entry_zone": entry_zone,
                 "current_price": current_price,

@@ -383,3 +383,105 @@ class MarketClient:
             "analyst": analyst,
             "technical": technical,
         }
+
+    def get_market_overview(self, market: str = "US") -> Dict[str, Any]:
+        """Analyzes broad market regime, index trends, and volatility gauge for US or Indian market."""
+        market = market.upper()
+        if not hasattr(self, "_market_cache"):
+            self._market_cache = {}
+
+        now = time.time()
+        cached = self._market_cache.get(market)
+        if cached and (now - cached["timestamp"] < 60):
+            return cached["data"]
+
+        if market == "IN":
+            index_symbols = [
+                {"symbol": "^NSEI", "name": "NIFTY 50", "currency": "INR"},
+                {"symbol": "^BSESN", "name": "BSE SENSEX", "currency": "INR"},
+                {"symbol": "^INDIAVIX", "name": "INDIA VIX", "currency": ""},
+            ]
+        else:
+            index_symbols = [
+                {"symbol": "^GSPC", "name": "S&P 500", "currency": "USD"},
+                {"symbol": "^IXIC", "name": "NASDAQ Composite", "currency": "USD"},
+                {"symbol": "^VIX", "name": "CBOE Volatility (VIX)", "currency": ""},
+            ]
+
+        indices = []
+        bullish_count = 0
+        total_eval = 0
+        vix_val = None
+
+        for item in index_symbols:
+            sym = item["symbol"]
+            tech = self.get_technical_data(sym)
+            analyst = self.get_analyst_data(sym)
+            
+            price = None
+            change_pct = 0.0
+            if analyst and analyst.get("current_price"):
+                price = analyst["current_price"]
+                change_pct = analyst.get("day_change_pct", 0.0)
+            elif tech and tech.get("latest_close"):
+                price = tech["latest_close"]
+                prev = tech.get("prev_close") or price
+                change_pct = round(((price - prev) / prev) * 100, 2) if prev else 0.0
+
+            above_200 = tech.get("trend_above_ema200") if tech else None
+            above_21 = tech.get("trend_above_ema21") if tech else None
+            rsi = tech.get("rsi_14") if tech else None
+
+            if "VIX" in sym:
+                vix_val = price or 16.0
+                status_label = "Low Volatility" if vix_val < 18 else ("Moderate" if vix_val < 25 else "High Fear")
+            else:
+                total_eval += 1
+                if above_200:
+                    bullish_count += 1
+                status_label = "Bullish" if above_200 and above_21 else ("Neutral" if above_200 else "Bearish")
+
+            indices.append({
+                "symbol": sym,
+                "name": item["name"],
+                "price": price,
+                "change_pct": change_pct,
+                "above_200": above_200,
+                "above_21": above_21,
+                "rsi": rsi,
+                "status": status_label,
+                "currency": item["currency"]
+            })
+
+        # Market Regime Classification
+        vix_score = vix_val or 18.0
+        if bullish_count == total_eval and vix_score < 22:
+            regime = "BULLISH ACCUMULATION REGIME"
+            bias = "BULLISH"
+            color = "#10b981"
+            guidance = "Market breadth is strong with major indices holding above their 200 EMAs. Favorable environment for high-confluence BUY signals and breakout follow-through."
+        elif bullish_count > 0 and vix_score <= 26:
+            regime = "CHOPPY CONSOLIDATION REGIME"
+            bias = "NEUTRAL"
+            color = "#f59e0b"
+            guidance = "Market is in a rangebound consolidation phase. Be selective: buy only in defined entry zones, protect capital with tight stop-losses, and lock profits at TP1."
+        else:
+            regime = "BEARISH RISK-OFF REGIME"
+            bias = "BEARISH"
+            color = "#ef4444"
+            guidance = "Macro indices are under distribution or breaking key moving averages. Volatility is elevated. Avoid aggressive new buys; trim laggards and honor stop-loss exits."
+
+        overview = {
+            "market": market,
+            "regime": regime,
+            "bias": bias,
+            "color": color,
+            "vix": vix_score,
+            "bullish_ratio": f"{bullish_count}/{total_eval}",
+            "guidance": guidance,
+            "indices": indices,
+            "updated_at": time.strftime("%H:%M:%S UTC", time.gmtime(now))
+        }
+
+        self._market_cache[market] = {"data": overview, "timestamp": now}
+        return overview
