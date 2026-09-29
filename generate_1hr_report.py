@@ -53,8 +53,8 @@ def generate_report() -> str:
         rationale = p.get("ai_rationale", "")
 
         try:
-            live_data = client.get_realtime_quote(sym)
-            live_price = float(live_data.get("current_price") or entry_price)
+            live_data = client.get_full_analysis(sym)
+            live_price = float(live_data.get("analyst", {}).get("current_price") or entry_price)
         except Exception:
             live_price = entry_price
 
