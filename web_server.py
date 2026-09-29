@@ -3709,10 +3709,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
             self.send_json(portfolio.get_summary(live_prices))
 
-        elif path == "/api/signals-feed":
+        elif path in ("/api/signals-feed", "/api/signals"):
             self.send_json(list(reversed(signals_feed[-50:])))
 
-        elif path == "/api/practice":
+        elif path in ("/api/practice", "/api/practice/portfolio"):
             live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
             self.send_json(practice_portfolio.get_summary(live_prices))
 
