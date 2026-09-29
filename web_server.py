@@ -13,6 +13,7 @@ from market_client import MarketClient
 from strategy import IndicatorStrategy
 from notifier import Notifier, get_alert_history
 from ai_assistant import AIAssistant
+from paper_trading import PaperPortfolio
 
 PORT = 5000
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -56,13 +57,14 @@ strategy = IndicatorStrategy(
     rsi_oversold=config.get("rsi_oversold", 30.0),
 )
 ai_assistant = AIAssistant()
+portfolio = PaperPortfolio()
 
 cached_results: Dict[str, Any] = {}
 auto_monitor_enabled = config.get("auto_monitor_enabled", True)
 alerted_triggers = set()
 
 def background_market_monitor_loop():
-    """Background daemon that periodically scans watchlists and dispatches Buy and Sell alerts."""
+    """Background daemon that periodically scans watchlists, checks portfolio stop losses, and dispatches Buy and Sell alerts."""
     while True:
         try:
             if auto_monitor_enabled:
@@ -99,6 +101,11 @@ def background_market_monitor_loop():
                                     alerted_triggers.discard((res["symbol"], st))
                     except Exception:
                         pass
+
+                # Check active virtual portfolio positions against live prices for TP / SL hits
+                if portfolio.positions:
+                    live_prices = {sym: r.get("current_price", 0.0) for sym, r in cached_results.items() if r.get("current_price")}
+                    portfolio.evaluate_live_stops(live_prices)
         except Exception:
             pass
         time.sleep(180)
@@ -419,6 +426,89 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .trigger-action-btn.sell-btn:hover {
       background: rgba(239,68,68,0.25);
+    }
+
+    /* Virtual $1,000 Portfolio & Report Modal */
+    .portfolio-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+      margin-bottom: 14px;
+    }
+    .portfolio-stat-box {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    .stat-big-val {
+      font-family: var(--font-mono);
+      font-size: 19px;
+      font-weight: 700;
+      margin: 4px 0 2px 0;
+    }
+    .stat-sub-val {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 1002;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 16px;
+    }
+    .modal-box {
+      background: #10141f;
+      border: 1px solid #2d3748;
+      border-radius: 10px;
+      width: 820px;
+      max-width: 100%;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.8);
+    }
+    .modal-header {
+      background: #161b2a;
+      padding: 14px 18px;
+      border-bottom: 1px solid #242c3f;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #e2e8f0;
+    }
+    .modal-body h3 {
+      margin: 16px 0 8px 0;
+      color: #60a5fa;
+      font-size: 14px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 4px;
+    }
+    .modal-body ul {
+      margin-left: 18px;
+      margin-bottom: 12px;
+    }
+    .modal-body li {
+      margin-bottom: 4px;
+    }
+    .modal-body strong {
+      color: #f8fafc;
     }
 
     /* Alerts Drawer */
@@ -1188,6 +1278,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="trigger-action-btn buy-btn" onclick="dispatchDirectTradeAlert('BUY')">
               ⚡ Send Buy Alert to Phone & Discord
             </button>
+            <button class="trigger-action-btn buy-btn" onclick="buyActiveStockInPortfolio()" style="margin-top: 6px; background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3);">
+              💼 Buy with Virtual $250 Credits
+            </button>
           </div>
 
           <div class="trigger-card sell-card" id="triggerSellCard">
@@ -1267,6 +1360,115 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </table>
       </div>
     </div>
+
+    <!-- VIRTUAL $1,000 AI PORTFOLIO & PROBABILITY AUDIT SECTION -->
+    <div class="card" style="margin-top: 20px;" id="portfolioSection">
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 14px; font-weight: 700; color: #fff;">💼 Virtual $1,000 AI Paper Portfolio</span>
+          <span class="ai-model-badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3);">Signal Verification Mode</span>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="primary" onclick="autoInvestTopPicks()" style="background: #10b981; border-color: #10b981; font-weight: 600;" title="Deploy virtual credits into top scoring confluence setups">
+            🤖 Auto-Invest $1,000 in Top AI Picks
+          </button>
+          <button class="primary" onclick="openAIReportModal()" style="background: #8b5cf6; border-color: #8b5cf6; font-weight: 600;" title="Generate institutional AI P&L and probability verification report">
+            📊 Generate AI P&L Report
+          </button>
+          <button onclick="resetPortfolioCredits()" style="border-color: #475569;" title="Reset virtual credits back to $1,000.00">
+            ↺ Reset ($1,000)
+          </button>
+        </div>
+      </div>
+
+      <!-- Stat Cards Grid -->
+      <div class="portfolio-stats-grid">
+        <div class="portfolio-stat-box">
+          <div class="exec-label">Total Portfolio Equity</div>
+          <div class="stat-big-val" id="portTotalEquity">$1,000.00</div>
+          <div class="stat-sub-val" id="portTotalReturn">+0.00% Overall</div>
+        </div>
+        <div class="portfolio-stat-box">
+          <div class="exec-label">Available Cash</div>
+          <div class="stat-big-val" id="portCash">$1,000.00</div>
+          <div class="stat-sub-val">Virtual Buying Power</div>
+        </div>
+        <div class="portfolio-stat-box">
+          <div class="exec-label">Realized Net P&L</div>
+          <div class="stat-big-val" id="portRealizedPnl">$0.00</div>
+          <div class="stat-sub-val" id="portClosedTrades">0 Closed Trades</div>
+        </div>
+        <div class="portfolio-stat-box">
+          <div class="exec-label">Unrealized Live P&L</div>
+          <div class="stat-big-val" id="portUnrealizedPnl">$0.00</div>
+          <div class="stat-sub-val" id="portOpenCount">0 Active Holdings</div>
+        </div>
+        <div class="portfolio-stat-box">
+          <div class="exec-label">Win Rate & Factor</div>
+          <div class="stat-big-val" id="portWinRate">0.0%</div>
+          <div class="stat-sub-val" id="portProfitFactor">Profit Factor: 1.00</div>
+        </div>
+      </div>
+
+      <!-- Subgrid: Active Positions & Closed History -->
+      <div style="display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 14px;">
+        <!-- Active Positions Table -->
+        <div>
+          <div class="card-title" style="margin-bottom: 8px;">
+            <span>🟢 Active Positions Under Forward Test</span>
+            <span id="portOpenPositionsMeta" style="font-family: var(--font-mono); font-size: 11px;">0 open positions</span>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Shares</th>
+                  <th>Entry Price</th>
+                  <th>Live Price</th>
+                  <th>Invested</th>
+                  <th>Current Value</th>
+                  <th>Unrealized P&L</th>
+                  <th>Stop Loss</th>
+                  <th>TP1 Target</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="portOpenTableBody">
+                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 18px;">No active positions. Click "🤖 Auto-Invest $1,000 in Top AI Picks" or buy with virtual credits above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Trade History Table -->
+        <div>
+          <div class="card-title" style="margin-bottom: 8px;">
+            <span>📜 Closed Trade History & Realized P&L</span>
+            <span id="portTradeHistoryMeta" style="font-family: var(--font-mono); font-size: 11px;">0 trades</span>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Entry ➔ Exit</th>
+                  <th>Invested</th>
+                  <th>Proceeds</th>
+                  <th>Realized P&L</th>
+                  <th>Result</th>
+                  <th>Exit Reason</th>
+                  <th>Exit Time</th>
+                </tr>
+              </thead>
+              <tbody id="portHistoryTableBody">
+                <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 18px;">No closed trades yet. Stop-Loss and Take-Profit automated triggers will log executions here.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- FLOATING AI CHATBOT BUTTON & DRAWER -->
@@ -1322,6 +1524,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="alerts-list" id="alertsList">
       <div style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 12px;">No alerts recorded yet. Click "⚡ Scan & Send Buy/Sell Alerts" to scan the market.</div>
+    </div>
+  </div>
+
+  <!-- AI PORTFOLIO & PROBABILITY AUDIT REPORT MODAL -->
+  <div class="modal-overlay" id="reportModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 15px; font-weight: 700;">📊 AI Quantitative P&L & Probability Audit</span>
+          <span class="ai-model-badge" id="reportModelBadge">Nemotron-120B / Free MoE</span>
+        </div>
+        <button onclick="closeAIReportModal()" style="background: none; border: none; color: #94a3b8; font-size: 18px; cursor: pointer;">✕</button>
+      </div>
+      <div class="modal-body" id="reportBody">
+        <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+          <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
+          <div>Auditing $1,000 virtual portfolio P&L and computing probability accuracy...</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 12px 18px; background: #131826; border-top: 1px solid #242c3f; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 11px; color: var(--text-muted);" id="reportTimestamp">-</span>
+        <button class="primary" onclick="generateAIReport()" style="padding: 6px 12px;">↻ Re-run Audit</button>
+      </div>
     </div>
   </div>
 
@@ -1875,11 +2100,272 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    /* VIRTUAL $1,000 PORTFOLIO FUNCTIONS */
+    async function fetchPortfolio() {
+      try {
+        const res = await fetch('/api/portfolio');
+        const data = await res.json();
+        updatePortfolioUI(data);
+      } catch (e) {
+        console.error('Error fetching portfolio:', e);
+      }
+    }
+
+    function updatePortfolioUI(data) {
+      if (!data) return;
+      
+      const equityEl = document.getElementById('portTotalEquity');
+      const returnEl = document.getElementById('portTotalReturn');
+      const cashEl = document.getElementById('portCash');
+      const realizedEl = document.getElementById('portRealizedPnl');
+      const unrealizedEl = document.getElementById('portUnrealizedPnl');
+      const closedTradesEl = document.getElementById('portClosedTrades');
+      const openCountEl = document.getElementById('portOpenCount');
+      const winRateEl = document.getElementById('portWinRate');
+      const factorEl = document.getElementById('portProfitFactor');
+
+      if (equityEl) equityEl.innerText = '$' + data.total_equity.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (returnEl) {
+        const sign = data.total_pnl >= 0 ? '+' : '';
+        returnEl.innerText = `${sign}$${data.total_pnl.toFixed(2)} (${sign}${data.total_pnl_pct.toFixed(2)}%) Overall`;
+        returnEl.style.color = data.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      if (cashEl) cashEl.innerText = '$' + data.cash.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      
+      if (realizedEl) {
+        const sign = data.realized_pnl >= 0 ? '+' : '';
+        realizedEl.innerText = `${sign}$${data.realized_pnl.toFixed(2)}`;
+        realizedEl.style.color = data.realized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades} Closed Trades (${data.wins}W / ${data.losses}L)`;
+
+      if (unrealizedEl) {
+        const sign = data.unrealized_pnl >= 0 ? '+' : '';
+        unrealizedEl.innerText = `${sign}$${data.unrealized_pnl.toFixed(2)}`;
+        unrealizedEl.style.color = data.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      if (openCountEl) openCountEl.innerText = `${data.open_positions_count} Active Holdings`;
+
+      if (winRateEl) {
+        winRateEl.innerText = `${data.win_rate_pct.toFixed(1)}%`;
+        winRateEl.style.color = data.win_rate_pct >= 50 ? 'var(--green)' : (data.total_trades === 0 ? 'inherit' : 'var(--red)');
+      }
+      if (factorEl) factorEl.innerText = `Profit Factor: ${data.profit_factor.toFixed(2)}`;
+
+      // Render Open Positions Table
+      const openTbody = document.getElementById('portOpenTableBody');
+      const openMeta = document.getElementById('portOpenPositionsMeta');
+      if (openMeta) openMeta.innerText = `${data.positions.length} active positions`;
+
+      if (openTbody) {
+        if (!data.positions || data.positions.length === 0) {
+          openTbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 18px;">No active positions. Click "🤖 Auto-Invest $1,000 in Top AI Picks" or buy with virtual credits above.</td></tr>';
+        } else {
+          openTbody.innerHTML = '';
+          data.positions.forEach(p => {
+            const tr = document.createElement('tr');
+            const sign = p.unrealized_pnl >= 0 ? '+' : '';
+            const colorClass = p.unrealized_pnl >= 0 ? 'color: var(--green);' : 'color: var(--red);';
+            const currSymbol = p.currency === 'INR' ? '₹' : '$';
+            tr.innerHTML = `
+              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')">${p.symbol}</strong></td>
+              <td style="font-family: var(--font-mono);">${p.shares}</td>
+              <td style="font-family: var(--font-mono);">${currSymbol}${p.entry_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">${currSymbol}${p.current_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">$${p.invested.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 600;">$${p.current_value.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${sign}$${p.unrealized_pnl.toFixed(2)} (${sign}${p.unrealized_pct.toFixed(2)}%)</td>
+              <td style="font-family: var(--font-mono); color: var(--red);">${p.stop_loss ? currSymbol + p.stop_loss.toFixed(2) : '-'}</td>
+              <td style="font-family: var(--font-mono); color: var(--green);">${p.take_profit_1 ? currSymbol + p.take_profit_1.toFixed(2) : '-'}</td>
+              <td>
+                <button onclick="liquidatePosition('${p.symbol}', ${p.current_price})" style="padding: 3px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: var(--red); border-color: rgba(239,68,68,0.3);">
+                  Liquidate
+                </button>
+              </td>
+            `;
+            openTbody.appendChild(tr);
+          });
+        }
+      }
+
+      // Render Closed Trades Table
+      const histTbody = document.getElementById('portHistoryTableBody');
+      const histMeta = document.getElementById('portTradeHistoryMeta');
+      if (histMeta) histMeta.innerText = `${data.trade_history.length} trades recorded`;
+
+      if (histTbody) {
+        if (!data.trade_history || data.trade_history.length === 0) {
+          histTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 18px;">No closed trades yet. Automated Stop-Loss and Take-Profit rules will log executions here.</td></tr>';
+        } else {
+          histTbody.innerHTML = '';
+          data.trade_history.forEach(t => {
+            const tr = document.createElement('tr');
+            const sign = t.pnl_amount >= 0 ? '+' : '';
+            const colorClass = t.pnl_amount >= 0 ? 'color: var(--green);' : 'color: var(--red);';
+            const currSymbol = t.currency === 'INR' ? '₹' : '$';
+            const resultBadge = t.result === 'WIN' 
+              ? '<span class="status-pill strong-buy">WIN</span>' 
+              : '<span class="status-pill sell">LOSS</span>';
+            tr.innerHTML = `
+              <td><strong>${t.symbol}</strong></td>
+              <td style="font-family: var(--font-mono);">${currSymbol}${t.entry_price.toFixed(2)} ➔ ${currSymbol}${t.exit_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">$${t.invested.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">$${t.proceeds.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${sign}$${t.pnl_amount.toFixed(2)} (${sign}${t.pnl_pct.toFixed(2)}%)</td>
+              <td>${resultBadge}</td>
+              <td style="font-size: 11px; font-family: var(--font-mono); color: #94a3b8;">${t.exit_reason}</td>
+              <td style="font-size: 11px; color: var(--text-muted);">${t.exit_time || '-'}</td>
+            `;
+            histTbody.appendChild(tr);
+          });
+        }
+      }
+    }
+
+    async function autoInvestTopPicks() {
+      showToast('🤖 AI scanning top confluence setups and deploying $1,000 credits...');
+      try {
+        const res = await fetch('/api/portfolio/auto-invest', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({market: currentMarket})
+        });
+        const data = await res.json();
+        if (data.executed && data.executed.length > 0) {
+          const syms = data.executed.map(e => e.symbol).join(', ');
+          showToast(`✓ Auto-invested in ${data.executed.length} setups: ${syms}`);
+        } else {
+          showToast('No new BUY confluence setups found or all slots full.');
+        }
+        if (data.summary) {
+          updatePortfolioUI(data.summary);
+        } else {
+          fetchPortfolio();
+        }
+      } catch (e) {
+        showToast('Error auto-investing: ' + e);
+      }
+    }
+
+    async function buyActiveStockInPortfolio() {
+      if (!activeResult) return;
+      showToast(`Buying $250 of ${activeResult.symbol} with virtual credits...`);
+      try {
+        const ex = activeResult.execution || {};
+        const res = await fetch('/api/portfolio/buy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            symbol: activeResult.symbol,
+            price: activeResult.current_price,
+            allocation: 250.0,
+            stop_loss: ex.stop_loss || 0,
+            take_profit_1: ex.take_profit_1 || 0,
+            take_profit_2: ex.take_profit_2 || 0,
+            score: activeResult.score || 50,
+            signal: activeResult.signal || 'BUY',
+            currency: activeResult.currency || 'USD'
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ Bought ${data.shares} shares of ${data.symbol} for $${data.invested}!`);
+          fetchPortfolio();
+        } else {
+          showToast(`Buy failed: ${data.error || 'Unknown error'}`);
+        }
+      } catch (e) {
+        showToast('Error: ' + e);
+      }
+    }
+
+    async function liquidatePosition(symbol, price) {
+      if (!confirm(`Liquidate active position for ${symbol} at $${price}?`)) return;
+      try {
+        const res = await fetch('/api/portfolio/sell', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({symbol: symbol, price: price, reason: 'MANUAL_LIQUIDATE'})
+        });
+        const data = await res.json();
+        if (data.success) {
+          const sign = data.pnl >= 0 ? '+' : '';
+          showToast(`✓ Sold ${symbol}: Realized P&L ${sign}$${data.pnl} (${sign}${data.pnl_pct}%)`);
+          fetchPortfolio();
+        } else {
+          showToast(`Sell failed: ${data.error || 'Unknown error'}`);
+        }
+      } catch (e) {
+        showToast('Error liquidating: ' + e);
+      }
+    }
+
+    async function resetPortfolioCredits() {
+      if (!confirm('Reset virtual portfolio back to $1,000.00 virtual credits?')) return;
+      try {
+        const res = await fetch('/api/portfolio/reset', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'}
+        });
+        const data = await res.json();
+        updatePortfolioUI(data);
+        showToast('✓ Virtual portfolio reset to $1,000.00 cash.');
+      } catch (e) {
+        showToast('Error resetting: ' + e);
+      }
+    }
+
+    /* AI P&L REPORT MODAL FUNCTIONS */
+    function openAIReportModal() {
+      const modal = document.getElementById('reportModal');
+      modal.style.display = 'flex';
+      generateAIReport();
+    }
+
+    function closeAIReportModal() {
+      const modal = document.getElementById('reportModal');
+      modal.style.display = 'none';
+    }
+
+    async function generateAIReport() {
+      const bodyEl = document.getElementById('reportBody');
+      const badgeEl = document.getElementById('reportModelBadge');
+      const timeEl = document.getElementById('reportTimestamp');
+
+      bodyEl.innerHTML = `
+        <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+          <div style="font-size: 28px; margin-bottom: 12px; animation: pulse 1.5s infinite;">⚡</div>
+          <div style="font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px;">Chief Quantitative Risk Officer Audit in Progress</div>
+          <div style="font-size: 12px;">Auditing $1,000 forward testing data, win rate, risk-reward skew, and probability validity...</div>
+        </div>
+      `;
+
+      try {
+        const res = await fetch('/api/portfolio/report', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'}
+        });
+        const data = await res.json();
+        if (badgeEl) badgeEl.innerText = data.model || 'Nemotron-120B / Free';
+        if (timeEl) timeEl.innerText = 'Generated: ' + (data.generated_at || new Date().toISOString());
+
+        if (data.report) {
+          bodyEl.innerHTML = formatMarkdown(data.report);
+        } else {
+          bodyEl.innerHTML = '<div style="color: var(--red); padding: 20px;">Failed to generate AI report.</div>';
+        }
+      } catch (e) {
+        bodyEl.innerHTML = `<div style="color: var(--red); padding: 20px;">Error generating report: ${e}</div>`;
+      }
+    }
+
     // Startup
     loadConfig();
     switchMarket('US');
     fetchMarketOverview(false);
     fetchAlertsHistory();
+    fetchPortfolio();
+    setInterval(fetchPortfolio, 10000);
     setInterval(fetchAlertsHistory, 15000);
     setInterval(() => fetchMarketOverview(false), 60000);
   </script>
@@ -1967,6 +2453,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             limit = int(query.get("limit", [50])[0])
             self.send_json(get_alert_history(limit))
 
+        elif path == "/api/portfolio":
+            live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
+            self.send_json(portfolio.get_summary(live_prices))
+
+        elif path == "/api/portfolio/report":
+            live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
+            summary = portfolio.get_summary(live_prices)
+            report = ai_assistant.generate_portfolio_report(summary)
+            self.send_json(report)
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -1981,7 +2477,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             payload = {}
 
-        if path == "/api/chat":
+        if path == "/api/portfolio/buy":
+            sym = payload.get("symbol", "").upper().strip()
+            price = float(payload.get("price", 0.0))
+            allocation = float(payload.get("allocation", 250.0))
+            sl = float(payload.get("stop_loss", 0.0))
+            tp1 = float(payload.get("take_profit_1", 0.0))
+            tp2 = float(payload.get("take_profit_2", 0.0))
+            score = int(payload.get("score", 50))
+            signal = payload.get("signal", "BUY")
+            curr = payload.get("currency", "USD")
+            res = portfolio.buy(sym, price, allocation, sl, tp1, tp2, score, signal, curr)
+            self.send_json(res)
+
+        elif path == "/api/portfolio/sell":
+            sym = payload.get("symbol", "").upper().strip()
+            price = float(payload.get("price", 0.0))
+            reason = payload.get("reason", "MANUAL")
+            res = portfolio.sell(sym, price, exit_reason=reason)
+            self.send_json(res)
+
+        elif path == "/api/portfolio/auto-invest":
+            market = payload.get("market", "US").upper()
+            stocks = list(cached_results.values())
+            if len(stocks) < 3:
+                syms = config.get("watchlist_us", [])[:6] if market == "US" else config.get("watchlist_india", [])[:6]
+                for s in syms:
+                    try:
+                        raw = client.get_full_analysis(client.resolve_symbol(s))
+                        if raw and raw.get("analyst"):
+                            res = strategy.analyze(raw)
+                            cached_results[res["symbol"]] = res
+                            stocks.append(res)
+                    except Exception:
+                        pass
+            executed = portfolio.auto_invest_top_picks(stocks, max_positions=4)
+            live_prices = {s: r.get("current_price", 0.0) for s, r in cached_results.items() if r.get("current_price")}
+            self.send_json({"executed": executed, "summary": portfolio.get_summary(live_prices)})
+
+        elif path == "/api/portfolio/reset":
+            summary = portfolio.reset()
+            self.send_json(summary)
+
+        elif path == "/api/portfolio/report":
+            live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
+            summary = portfolio.get_summary(live_prices)
+            report = ai_assistant.generate_portfolio_report(summary)
+            self.send_json(report)
+
+        elif path == "/api/chat":
             message = payload.get("message", "").strip()
             symbol = payload.get("symbol", "")
             history = payload.get("history", [])
