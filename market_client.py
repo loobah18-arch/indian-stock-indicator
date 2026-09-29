@@ -51,12 +51,37 @@ class MarketClient:
         return None
 
     def resolve_symbol(self, symbol: str) -> str:
-        """Intelligently resolves bare tickers to either US (NVDA) or Indian (RELIANCE.NS) symbols."""
+        """Intelligently resolves bare tickers to US, Indian, or Commodity/Crypto/Forex symbols."""
         sym = symbol.strip().upper()
         if not sym:
             return sym
         if "." in sym or sym.startswith("^"):
             return sym
+
+        # Known commodity, crypto & forex mappings
+        direct_map = {
+            "XAU/USD": "GC=F", "XAUUSD": "GC=F", "GOLD": "GC=F", "XAU": "GC=F",
+            "XAG/USD": "SI=F", "XAGUSD": "SI=F", "SILVER": "SI=F", "XAG": "SI=F",
+            "BTC/USD": "BTC-USD", "BTCUSD": "BTC-USD", "BTC": "BTC-USD",
+            "ETH/USD": "ETH-USD", "ETHUSD": "ETH-USD", "ETH": "ETH-USD",
+            "SOL/USD": "SOL-USD", "SOLUSD": "SOL-USD", "SOL": "SOL-USD",
+            "XMR/USD": "XMR-USD", "XMRUSD": "XMR-USD", "XMR": "XMR-USD",
+            "XRP/USD": "XRP-USD", "XRPUSD": "XRP-USD", "XRP": "XRP-USD",
+            "DOGE/USD": "DOGE-USD", "DOGEUSD": "DOGE-USD", "DOGE": "DOGE-USD",
+            "EUR/USD": "EURUSD=X", "EURUSD": "EURUSD=X",
+            "GBP/USD": "GBPUSD=X", "GBPUSD": "GBPUSD=X",
+            "USD/INR": "USDINR=X", "USDINR": "USDINR=X",
+        }
+        if sym in direct_map:
+            return direct_map[sym]
+
+        if "/" in sym:
+            base, quote = sym.split("/", 1)
+            if quote in ("USD", "USDT"):
+                return f"{base}-USD"
+            elif quote in ("INR", "EUR", "GBP"):
+                return f"{base}{quote}=X"
+            return f"{base}{quote}=X"
 
         if sym in US_CORE_TICKERS:
             return sym

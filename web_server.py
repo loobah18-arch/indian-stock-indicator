@@ -2034,6 +2034,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <script>
     let currentMarket = 'US';
+    let currentChartSymbol = 'NVDA';
     let activeResult = null;
     let chatHistory = [];
 
@@ -2046,6 +2047,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       'NVDA': 'NASDAQ', 'AAPL': 'NASDAQ', 'MSFT': 'NASDAQ', 'TSLA': 'NASDAQ', 'AMZN': 'NASDAQ', 'GOOGL': 'NASDAQ', 'GOOG': 'NASDAQ', 'META': 'NASDAQ', 'AMD': 'NASDAQ', 'QQQ': 'NASDAQ', 'NFLX': 'NASDAQ', 'INTC': 'NASDAQ', 'AVGO': 'NASDAQ', 'COIN': 'NASDAQ', 'PLTR': 'NASDAQ', 'SMCI': 'NASDAQ', 'ARM': 'NASDAQ'
     };
 
+    const SPECIAL_TV_MAP = {
+      'XAUUSD': 'OANDA:XAUUSD',
+      'GOLD': 'OANDA:XAUUSD',
+      'GC=F': 'COMEX:GC1!',
+      'XAGUSD': 'OANDA:XAGUSD',
+      'SILVER': 'OANDA:XAGUSD',
+      'SI=F': 'COMEX:SI1!',
+      'BTCUSD': 'BINANCE:BTCUSDT',
+      'BTCUSDT': 'BINANCE:BTCUSDT',
+      'ETHUSD': 'BINANCE:ETHUSDT',
+      'ETHUSDT': 'BINANCE:ETHUSDT',
+      'SOLUSD': 'BINANCE:SOLUSDT',
+      'SOLUSDT': 'BINANCE:SOLUSDT',
+      'XMRUSD': 'BINANCE:XMRUSDT',
+      'XMRUSDT': 'BINANCE:XMRUSDT',
+      'XRPUSD': 'BINANCE:XRPUSDT',
+      'XRPUSDT': 'BINANCE:XRPUSDT',
+      'DOGEUSD': 'BINANCE:DOGEUSDT',
+      'EURUSD': 'FX:EURUSD',
+      'GBPUSD': 'FX:GBPUSD',
+      'USDINR': 'FX_IDC:USDINR'
+    };
+
     function showToast(msg) {
       const t = document.getElementById('toastMsg');
       t.innerText = msg;
@@ -2056,6 +2080,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function toTradingViewSymbol(sym) {
       if (!sym) return 'NASDAQ:NVDA';
       sym = sym.toUpperCase().trim();
+
+      if (SPECIAL_TV_MAP[sym]) {
+        return SPECIAL_TV_MAP[sym];
+      }
+
+      // If symbol contains a slash (e.g. XAU/USD, XMA/USD, BTC/USD),
+      // strip the slash so TradingView treats it as a single market instrument
+      // rather than a mathematical ratio formula (which locks to 1D only!).
+      if (sym.includes('/')) {
+        const clean = sym.replace(/\//g, '');
+        if (SPECIAL_TV_MAP[clean]) {
+          return SPECIAL_TV_MAP[clean];
+        }
+        return clean;
+      }
+
+      if (sym.includes('-')) {
+        const clean = sym.replace(/-/g, '');
+        if (SPECIAL_TV_MAP[clean]) {
+          return SPECIAL_TV_MAP[clean];
+        }
+      }
+
       if (sym.endsWith('.NS')) {
         return 'NSE:' + sym.replace('.NS', '');
       }
@@ -2098,12 +2145,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         activeEl.style.color = '#60a5fa';
         activeEl.style.borderColor = '#3b82f6';
       }
-      const currentSym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      const inputVal = document.getElementById('tickerInput')?.value.trim();
+      const currentSym = currentChartSymbol || (activeResult ? activeResult.symbol : (inputVal || (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS')));
       updateTradingViewChart(currentSym, preset);
     }
 
     function openFullTradingViewTab() {
-      const sym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      const inputVal = document.getElementById('tickerInput')?.value.trim();
+      const sym = currentChartSymbol || (activeResult ? activeResult.symbol : (inputVal || (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS')));
       const tvSym = toTradingViewSymbol(sym);
       window.open('https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(tvSym), '_blank');
     }
@@ -2130,25 +2179,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         activeEl.style.borderColor = '#3b82f6';
       }
 
-      const currentSym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      const inputVal = document.getElementById('tickerInput')?.value.trim();
+      const currentSym = currentChartSymbol || (activeResult ? activeResult.symbol : (inputVal || (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS')));
       updateTradingViewChart(currentSym);
       analyzeSpecific(currentSym, analysisTf);
     }
 
     function updateTradingViewChart(symbol, preset = null) {
+      if (!symbol) return;
+      currentChartSymbol = symbol;
       if (preset) currentTradingViewPreset = preset;
       const tvSym = toTradingViewSymbol(symbol);
       const tfLabel = currentChartTimeframe === 'D' ? '1D' : (currentChartTimeframe === 'W' ? '1W' : (currentChartTimeframe === '60' ? '1H' : currentChartTimeframe + 'm'));
-      document.getElementById('tvSymbolLabel').innerText = `${tvSym} • [${tfLabel}]`;
+      const labelEl = document.getElementById('tvSymbolLabel');
+      if (labelEl) labelEl.innerText = `${tvSym} • [${tfLabel}]`;
       
       const studies = TV_STUDIES[currentTradingViewPreset] || TV_STUDIES['all'];
       const iframe = document.getElementById('tradingview_iframe');
       const targetSrc = "https://s.tradingview.com/widgetembed/?symbol=" + encodeURIComponent(tvSym) +
         "&interval=" + encodeURIComponent(currentChartTimeframe) +
         "&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=131722&studies=" + studies +
-        "&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=1";
+        "&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=1&hide_top_toolbar=0";
       
-      if (iframe.src !== targetSrc) {
+      if (iframe && iframe.src !== targetSrc) {
         iframe.src = targetSrc;
       }
     }
@@ -2233,6 +2286,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function analyzeSpecific(sym, tf = null) {
+      if (!sym) return;
+      currentChartSymbol = sym;
+      const inputEl = document.getElementById('tickerInput');
+      if (inputEl && inputEl.value !== sym) inputEl.value = sym;
       const activeTf = tf || currentAnalysisTimeframe || '1d';
       showToast(`Analyzing ${sym} [${activeTf.toUpperCase()}]...`);
       updateTradingViewChart(sym);
@@ -2243,10 +2300,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (data && data.symbol) {
           renderActiveTicker(data);
         } else {
-          showToast('Failed to fetch data for: ' + sym);
+          showToast(`Live chart active for ${sym} (Quant metrics unavailable)`);
         }
       } catch (e) {
-        showToast('Error analyzing ' + sym + ': ' + e);
+        showToast('Live chart active for ' + sym);
       }
     }
 
@@ -2258,6 +2315,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderActiveTicker(data) {
       activeResult = data;
+      if (data && data.symbol) currentChartSymbol = data.symbol;
       const tfText = (data.timeframe || currentAnalysisTimeframe || '1D').toUpperCase();
       document.getElementById('updateTime').innerText = `Live • [${tfText}] • ` + new Date().toLocaleTimeString();
       document.getElementById('heroSymbol').innerText = data.symbol;
