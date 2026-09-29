@@ -58,7 +58,11 @@ def generate_report() -> str:
         except Exception:
             live_price = entry_price
 
-        curr_val = round(shares * live_price, 2)
+        is_inr = curr == "INR" or sym.endswith((".NS", ".BO"))
+        fx_rate = p.get("fx_rate") or (95.98 if is_inr else 1.0)
+        live_price_usd = round(live_price / fx_rate, 4) if is_inr else live_price
+
+        curr_val = round(shares * live_price_usd, 2)
         pos_pnl = round(curr_val - invested, 2)
         pos_pnl_pct = round(((live_price - entry_price) / entry_price) * 100, 2) if entry_price > 0 else 0.0
 

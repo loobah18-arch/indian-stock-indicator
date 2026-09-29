@@ -6,6 +6,28 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
+PRACTICE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "practice_portfolio.json")
+
+_cached_fx: Dict[str, Any] = {"rate": 95.98, "time": 0.0}
+
+def get_usd_inr_rate() -> float:
+    """Returns live USD/INR exchange rate with 10-minute caching for accurate multi-currency accounting."""
+    now = time.time()
+    if now - _cached_fx["time"] < 600 and _cached_fx["rate"] > 0:
+        return _cached_fx["rate"]
+    try:
+        from market_client import MarketClient
+        mc = MarketClient()
+        raw = mc.get_full_analysis("USDINR=X")
+        if raw and raw.get("analyst", {}).get("current_price"):
+            val = float(raw["analyst"]["current_price"])
+            if val > 50:
+                _cached_fx["rate"] = val
+                _cached_fx["time"] = now
+                return val
+    except Exception:
+        pass
+    return _cached_fx["rate"]
 
 class PaperPortfolio:
     """Manages $1,000 virtual credit fund for forward testing and probability audit."""
@@ -80,19 +102,25 @@ class PaperPortfolio:
         if self.cash < 10.0:
             return {"success": False, "error": f"Insufficient virtual cash (${self.cash:.2f} available)"}
 
-        # Position sizing: up to allocation or remaining cash
+        is_inr = currency == "INR" or symbol.endswith((".NS", ".BO"))
+        fx_rate = get_usd_inr_rate() if is_inr else 1.0
+        price_usd = round(price / fx_rate, 4) if is_inr else price
+
+        # Position sizing in USD fund: up to allocation or remaining cash
         invest_amount = min(allocation, self.cash)
-        shares = round(invest_amount / price, 4)
-        actual_invested = round(shares * price, 2)
+        shares = round(invest_amount / price_usd, 4)
+        actual_invested = round(shares * price_usd, 2)
 
         self.cash = round(self.cash - actual_invested, 2)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         position_data = {
             "symbol": symbol,
-            "entry_price": price,
+            "entry_price": price,              # Native exchange price (e.g. ₹1302.50)
+            "entry_price_usd": price_usd,      # USD price (e.g. $13.57)
+            "fx_rate": fx_rate,
             "shares": shares,
-            "invested": actual_invested,
+            "invested": actual_invested,       # USD amount (e.g. $250.00)
             "entry_time": now_str,
             "stop_loss": stop_loss or round(price * 0.95, 2),
             "take_profit_1": take_profit_1 or round(price * 1.05, 2),
@@ -113,6 +141,8 @@ class PaperPortfolio:
             old["shares"] = round(tot_shares, 4)
             old["invested"] = round(tot_invested, 2)
             old["entry_price"] = avg_price
+            old["entry_price_usd"] = round(avg_price / fx_rate, 4) if is_inr else avg_price
+            old["fx_rate"] = fx_rate
             old["stop_loss"] = stop_loss or old["stop_loss"]
             old["take_profit_1"] = take_profit_1 or old["take_profit_1"]
             old["take_profit_2"] = take_profit_2 or old["take_profit_2"]
@@ -128,6 +158,8 @@ class PaperPortfolio:
             "symbol": symbol,
             "shares": shares,
             "price": price,
+            "price_usd": price_usd,
+            "fx_rate": fx_rate,
             "invested": actual_invested,
             "score": score,
             "signal": signal,
@@ -154,7 +186,12 @@ class PaperPortfolio:
 
         fraction = shares / curr_shares
         portion_invested = round(pos["invested"] * fraction, 2)
-        gross_proceeds = round(shares * price, 2)
+
+        is_inr = pos.get("currency") == "INR" or symbol.endswith((".NS", ".BO"))
+        fx_rate = pos.get("fx_rate") or (get_usd_inr_rate() if is_inr else 1.0)
+        price_usd = round(price / fx_rate, 4) if is_inr else price
+
+        gross_proceeds = round(shares * price_usd, 2)
         pnl = round(gross_proceeds - portion_invested, 2)
         pnl_pct = round(((price - pos["entry_price"]) / pos["entry_price"]) * 100, 2)
 
@@ -165,7 +202,10 @@ class PaperPortfolio:
             "id": f"trade_{symbol}_{int(time.time())}",
             "symbol": symbol,
             "entry_price": pos["entry_price"],
+            "entry_price_usd": pos.get("entry_price_usd", round(pos["entry_price"] / fx_rate, 4) if is_inr else pos["entry_price"]),
             "exit_price": price,
+            "exit_price_usd": price_usd,
+            "fx_rate": fx_rate,
             "shares": shares,
             "invested": portion_invested,
             "proceeds": gross_proceeds,
@@ -368,7 +408,13 @@ class PaperPortfolio:
         for sym, pos in self.positions.items():
             curr_price = live_prices.get(sym, pos["entry_price"])
             shares = pos["shares"]
-            curr_val = round(shares * curr_price, 2)
+            is_inr = pos.get("currency") == "INR" or sym.endswith((".NS", ".BO"))
+            fx_rate = pos.get("fx_rate") or (get_usd_inr_rate() if is_inr else 1.0)
+
+            curr_price_usd = round(curr_price / fx_rate, 4) if is_inr else curr_price
+            entry_price_usd = pos.get("entry_price_usd", round(pos["entry_price"] / fx_rate, 4) if is_inr else pos["entry_price"])
+
+            curr_val = round(shares * curr_price_usd, 2)
             invested = pos["invested"]
             unrealized_pnl = round(curr_val - invested, 2)
             unrealized_pct = round(((curr_price - pos["entry_price"]) / pos["entry_price"]) * 100, 2) if pos["entry_price"] else 0.0
@@ -378,7 +424,10 @@ class PaperPortfolio:
                 "symbol": sym,
                 "shares": shares,
                 "entry_price": pos["entry_price"],
+                "entry_price_usd": entry_price_usd,
                 "current_price": curr_price,
+                "current_price_usd": curr_price_usd,
+                "fx_rate": fx_rate,
                 "invested": invested,
                 "current_value": curr_val,
                 "unrealized_pnl": unrealized_pnl,
@@ -424,3 +473,8 @@ class PaperPortfolio:
             "positions": open_positions_list,
             "trade_history": list(reversed(self.trade_history[-50:])),
         }
+
+class PracticePortfolio(PaperPortfolio):
+    """Manages user's manual sandbox trading account ($1,000 credits) to test AI guidance."""
+    def __init__(self, file_path: str = PRACTICE_FILE, initial_balance: float = 1000.0):
+        super().__init__(file_path=file_path, initial_balance=initial_balance)

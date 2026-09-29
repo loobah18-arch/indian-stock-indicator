@@ -14,10 +14,11 @@ from market_client import MarketClient
 from strategy import IndicatorStrategy
 from notifier import Notifier, get_alert_history
 from ai_assistant import AIAssistant
-from paper_trading import PaperPortfolio
+from paper_trading import PaperPortfolio, PracticePortfolio, get_usd_inr_rate
 
 PORT = 5000
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+SIGNALS_FEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signals_feed.json")
 
 def load_config() -> Dict[str, Any]:
     default_cfg = {
@@ -60,6 +61,28 @@ strategy = IndicatorStrategy(
 )
 ai_assistant = AIAssistant()
 portfolio = PaperPortfolio()
+practice_portfolio = PracticePortfolio()
+
+signals_feed: List[Dict[str, Any]] = []
+
+def load_signals_feed() -> List[Dict[str, Any]]:
+    global signals_feed
+    if os.path.exists(SIGNALS_FEED_FILE):
+        try:
+            with open(SIGNALS_FEED_FILE, "r", encoding="utf-8") as f:
+                signals_feed = json.load(f)
+        except Exception:
+            signals_feed = []
+    return signals_feed
+
+def save_signals_feed():
+    try:
+        with open(SIGNALS_FEED_FILE, "w", encoding="utf-8") as f:
+            json.dump(signals_feed[-50:], f, indent=2)
+    except Exception:
+        pass
+
+load_signals_feed()
 
 cached_results: Dict[str, Any] = {}
 auto_monitor_enabled = config.get("auto_monitor_enabled", True)
@@ -86,8 +109,32 @@ def background_market_monitor_loop():
                                 buy_t = triggers.get("buy", {})
                                 sell_t = triggers.get("sell", {})
 
+                                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                                 if buy_t.get("triggered"):
                                     key = (res["symbol"], "BUY")
+                                    sig_item = {
+                                        "id": f"sig_{res['symbol']}_{int(time.time())}",
+                                        "symbol": res["symbol"],
+                                        "name": res.get("name", res["symbol"]),
+                                        "action": "BUY",
+                                        "signal": res.get("signal", "BUY"),
+                                        "price": res.get("current_price", 0.0),
+                                        "score": res.get("score", 70),
+                                        "conviction": res.get("conviction", "High"),
+                                        "timestamp": now_str,
+                                        "entry_zone": res.get("execution", {}).get("entry_zone", f"${res.get('current_price', 0.0):.2f}"),
+                                        "stop_loss": res.get("execution", {}).get("stop_loss", 0.0),
+                                        "take_profit_1": res.get("execution", {}).get("take_profit_1", 0.0),
+                                        "take_profit_2": res.get("execution", {}).get("take_profit_2", 0.0),
+                                        "risk_reward": res.get("execution", {}).get("risk_reward_tp1", 1.5),
+                                        "instruction": buy_t.get("instruction") or f"Recommended BUY: Enter between {res.get('execution', {}).get('entry_zone')}. SL: {res.get('execution', {}).get('stop_loss')}. TP1: {res.get('execution', {}).get('take_profit_1')}.",
+                                        "currency": res.get("currency", "USD"),
+                                        "time_epoch": time.time()
+                                    }
+                                    if not any(s["symbol"] == res["symbol"] and s["action"] == "BUY" and (time.time() - float(s.get("time_epoch", 0))) < 300 for s in signals_feed):
+                                        signals_feed.append(sig_item)
+                                        save_signals_feed()
+
                                     if key not in alerted_triggers:
                                         notifier.send_trade_alert(res, "BUY")
                                         alerted_triggers.add(key)
@@ -96,6 +143,24 @@ def background_market_monitor_loop():
 
                                 if sell_t.get("triggered"):
                                     key = (res["symbol"], sell_t.get("type", "SELL"))
+                                    sig_item = {
+                                        "id": f"sig_{res['symbol']}_{int(time.time())}",
+                                        "symbol": res["symbol"],
+                                        "name": res.get("name", res["symbol"]),
+                                        "action": "SELL",
+                                        "signal": sell_t.get("type", "SELL"),
+                                        "price": res.get("current_price", 0.0),
+                                        "score": res.get("score", 40),
+                                        "conviction": res.get("conviction", "Defensive"),
+                                        "timestamp": now_str,
+                                        "instruction": sell_t.get("instruction") or f"Recommended SELL/TRIM: {sell_t.get('type')} at {res.get('current_price', 0.0)}.",
+                                        "currency": res.get("currency", "USD"),
+                                        "time_epoch": time.time()
+                                    }
+                                    if not any(s["symbol"] == res["symbol"] and s["action"] == "SELL" and (time.time() - float(s.get("time_epoch", 0))) < 300 for s in signals_feed):
+                                        signals_feed.append(sig_item)
+                                        save_signals_feed()
+
                                     if key not in alerted_triggers:
                                         notifier.send_trade_alert(res, "SELL")
                                         alerted_triggers.add(key)
@@ -104,6 +169,9 @@ def background_market_monitor_loop():
                                         alerted_triggers.discard((res["symbol"], st))
                         except Exception:
                             pass
+
+                # Live prices map for evaluation
+                live_prices = {sym: r.get("current_price", 0.0) for sym, r in cached_results.items() if r.get("current_price")}
 
                 # Autonomous AI Trading: deploy virtual credits into top confluence setups & execute TP/SL exits
                 if ai_auto_trading_enabled and cached_results:
@@ -117,9 +185,15 @@ def background_market_monitor_loop():
                             print(f"[{now_ts}] [AI AUTONOMOUS TRADER] SELL: {s['symbol']} @ ${s['exit_price']} | P&L: {sign}${s.get('pnl')} ({s.get('result')}) | Reason: {s.get('exit_reason')}")
                     except Exception as e:
                         print(f"[AI AUTO TRADER ERROR] {e}")
-                elif portfolio.positions:
-                    live_prices = {sym: r.get("current_price", 0.0) for sym, r in cached_results.items() if r.get("current_price")}
+                elif portfolio.positions and live_prices:
                     portfolio.evaluate_live_stops(live_prices)
+
+                # Practice Sandbox: evaluate live stops for manual practice positions
+                if practice_portfolio.positions and live_prices:
+                    try:
+                        practice_portfolio.evaluate_live_stops(live_prices)
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"[BACKGROUND MONITOR ERROR] {e}")
         time.sleep(60)
@@ -1185,7 +1259,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Market Selector & AI Autonomous Trader Tabs -->
+    <!-- Market Selector, AI Autonomous Trader & Practice Tabs -->
     <div class="market-tabs">
       <div class="market-tab active" id="tabUS" onclick="switchView('US')">
         <span>🇺🇸 US Market (NASDAQ / NYSE)</span>
@@ -1196,6 +1270,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="market-tab" id="tabAI" onclick="switchView('AI')">
         <span>🤖 AI Autonomous Fund & Trade Records ($1,000)</span>
         <span id="aiTabLivePill" style="background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; margin-left: 6px;">AUTO: ON</span>
+      </div>
+      <div class="market-tab" id="tabPractice" onclick="switchView('Practice')">
+        <span>🎮 Practice Sandbox & AI Guidance ($1,000)</span>
       </div>
     </div>
 
@@ -1236,9 +1313,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- Real-Time TradingView Candlestick Chart (Direct Embed Iframe) -->
     <div class="chart-card">
-      <div class="card-title">
-        <span>TradingView Real-Time Candlestick Chart (RSI, MACD, EMAs)</span>
-        <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 600; color: var(--blue);">NASDAQ:NVDA</span>
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>TradingView Real-Time Candlestick Chart</span>
+          <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 600; color: var(--blue);">NASDAQ:NVDA</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+          <button class="macro-btn" id="tvPresetAll" onclick="setTradingViewPreset('all')" style="padding: 2px 7px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">🔥 All Indicators</button>
+          <button class="macro-btn" id="tvPresetMomentum" onclick="setTradingViewPreset('momentum')" style="padding: 2px 7px; font-size: 11px;">⚡ Momentum</button>
+          <button class="macro-btn" id="tvPresetTrend" onclick="setTradingViewPreset('trend')" style="padding: 2px 7px; font-size: 11px;">📈 Trend</button>
+          <button class="macro-btn" id="tvPresetVol" onclick="setTradingViewPreset('vol')" style="padding: 2px 7px; font-size: 11px;">🌊 Vol & ATR</button>
+          <button class="macro-btn" onclick="openFullTradingViewTab()" style="padding: 2px 7px; font-size: 11px; background: rgba(16,185,129,0.15); color: #10b981; border-color: rgba(16,185,129,0.4);">↗ Open TV Pro</button>
+        </div>
       </div>
       <div class="tradingview-container">
         <iframe
@@ -1436,6 +1522,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </table>
       </div>
     </div>
+
+    <!-- 24/7 Continuous AI Market Signals & Timestamps Stream -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="pulsing-dot" style="background: #10b981;"></span>
+          <span style="font-weight: 700;">📡 24/7 Live AI Market Signals & Timestamps Stream</span>
+          <span class="ai-model-badge" style="background: rgba(59,130,246,0.2); color: #60a5fa; border-color: rgba(59,130,246,0.4);">ALWAYS ACTIVE</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="signalsFeedCount" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">0 signals logged</span>
+          <button class="macro-btn" onclick="fetchSignalsFeed()" style="padding: 2px 8px; font-size: 11px;">↻ Refresh</button>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+        Continuously scans market data 24/7 in the background and logs exact BUY / SELL trigger timestamps, price targets, and rationale.
+      </div>
+      <div class="table-container" style="max-height: 340px; overflow-y: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp (UTC)</th>
+              <th>Asset</th>
+              <th>Action</th>
+              <th>Signal Type</th>
+              <th>Trigger Price</th>
+              <th>Score</th>
+              <th>AI Instruction & Strategy</th>
+              <th>Quick Action</th>
+            </tr>
+          </thead>
+          <tbody id="signalsFeedBody">
+            <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 22px;">Monitoring market... Triggers with exact timestamps will stream here automatically.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div> <!-- end #marketView -->
 
   <!-- ============================================== -->
@@ -1588,6 +1711,169 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <!-- ======================================================= -->
+  <!-- VIEW 3: PRACTICE SANDBOX & TEST AI GUIDANCE ($1,000)    -->
+  <!-- ======================================================= -->
+  <div id="practiceView" style="display: none; margin-top: 15px;">
+    <!-- Practice Sandbox Banner -->
+    <div class="ai-live-banner" style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%); border-left: 4px solid #6366f1;">
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <span style="font-size: 26px;">🎮</span>
+        <div>
+          <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+            <span>Interactive Practice Sandbox ($1,000 Virtual Credits)</span>
+            <span class="ai-model-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border-color: rgba(99, 102, 241, 0.4);">MANUAL TEST LAB</span>
+          </div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
+            Test the AI's trading recommendations yourself! Buy and sell according to live AI guidance or test your own timing with zero financial risk.
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="primary" onclick="fetchAIGuidance()" style="background: #6366f1; border-color: #6366f1; font-weight: 600;">
+          💡 Refresh AI Guidance
+        </button>
+        <button onclick="resetPracticeCredits()" style="border-color: #475569;" title="Reset practice virtual credits back to $1,000.00">
+          ↺ Reset Practice ($1,000)
+        </button>
+      </div>
+    </div>
+
+    <!-- Practice Performance Matrix -->
+    <div class="accuracy-matrix">
+      <div class="accuracy-card">
+        <div class="acc-title">🎯 Practice Win Rate</div>
+        <div class="acc-val" id="pracWinRate" style="color: #818cf8;">0.0%</div>
+        <div class="acc-sub" id="pracWinLossRatio">0 Wins / 0 Losses</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">💰 Practice Total Return</div>
+        <div class="acc-val" id="pracTotalReturn">+0.00%</div>
+        <div class="acc-sub" id="pracEquitySub">Equity: $1,000.00 / $1,000.00</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">💵 Available Practice Cash</div>
+        <div class="acc-val" id="pracCash">$1,000.00</div>
+        <div class="acc-sub">Virtual Buying Power</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">📈 Realized Net P&L</div>
+        <div class="acc-val" id="pracRealizedPnl">$0.00</div>
+        <div class="acc-sub" id="pracClosedTrades">0 Closed Trades</div>
+      </div>
+    </div>
+
+    <!-- Live AI Guidance Cards (Top Recommended Setups) -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>💡 Live AI Guidance: Top Opportunities Ready for Test</span>
+          <span class="ai-model-badge" style="background: rgba(16,185,129,0.2); color: #10b981; border-color: rgba(16,185,129,0.4);">HIGH CONFLUENCE</span>
+        </div>
+        <span style="font-size: 11px; color: var(--text-muted);">Click "Follow AI: Buy" to test in your Practice Sandbox</span>
+      </div>
+      <div id="aiGuidanceGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 10px;">
+        <div style="color: var(--text-muted); font-size: 12px; padding: 15px; text-align: center; grid-column: 1 / -1;">
+          Loading AI recommendations...
+        </div>
+      </div>
+    </div>
+
+    <!-- Practice Manual Order Console -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title">
+        <span>⚡ Practice Trade Execution Console</span>
+        <span style="font-size: 11px; color: var(--text-muted);">Execute manual orders using virtual credits</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 10px; align-items: flex-end;">
+        <div>
+          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticker Symbol</label>
+          <input type="text" id="pracInputSymbol" placeholder="e.g. NVDA, RELIANCE.NS" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Allocation ($ USD)</label>
+          <input type="number" id="pracInputAmount" value="250" min="10" max="1000" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Custom Stop Loss (Optional)</label>
+          <input type="number" id="pracInputSL" placeholder="Auto 5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Take Profit (Optional)</label>
+          <input type="number" id="pracInputTP" placeholder="Auto 5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+        </div>
+        <div>
+          <button class="primary" onclick="submitPracticeOrder('BUY')" style="width: 100%; padding: 8px 12px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 13px;">
+            🛒 Buy into Practice
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Practice Open Positions Table -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title">
+        <span>🟢 Active Practice Positions</span>
+        <span id="pracOpenMeta" style="font-family: var(--font-mono); font-size: 11px;">0 active positions</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Shares</th>
+              <th>Entry Price</th>
+              <th>Live Price</th>
+              <th>Invested</th>
+              <th>Current Value</th>
+              <th>Unrealized P&L</th>
+              <th>Stop Loss</th>
+              <th>Take Profit</th>
+              <th>AI Score</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="pracOpenTbody">
+            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active practice positions. Buy a stock or follow AI guidance above to test!</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Practice Trade Records Audit Table -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div>
+          <span style="font-size: 14px; font-weight: 700;">📜 Practice Trade History & Accuracy Records</span>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Your personal record of trades executed according to AI guidance vs your own timing.</div>
+        </div>
+        <span id="pracHistoryMeta" style="font-family: var(--font-mono); font-size: 11px;">0 recorded trades</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Action Flow</th>
+              <th>Score</th>
+              <th>Entry Price</th>
+              <th>Exit Price</th>
+              <th>Invested</th>
+              <th>Proceeds</th>
+              <th>Realized P&L</th>
+              <th>Outcome</th>
+              <th>Exit Reason</th>
+              <th>Exit Time</th>
+            </tr>
+          </thead>
+          <tbody id="pracHistoryTbody">
+            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No closed practice trades yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div> <!-- end #practiceView -->
   </div>
 
   <!-- FLOATING AI CHATBOT BUTTON & DRAWER -->
@@ -1705,13 +1991,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return sym;
     }
 
-    function updateTradingViewChart(symbol) {
+    let currentTradingViewPreset = 'all';
+    const TV_STUDIES = {
+      'all': 'RSI%40tv-basicstudies%1BMACD%40tv-basicstudies%1BMASimple%40tv-basicstudies%1BMAExp%40tv-basicstudies%1BBB%40tv-basicstudies%1BVolume%40tv-basicstudies%1BATR%40tv-basicstudies%1BStochasticRSI%40tv-basicstudies',
+      'momentum': 'RSI%40tv-basicstudies%1BMACD%40tv-basicstudies%1BStochasticRSI%40tv-basicstudies',
+      'trend': 'MASimple%40tv-basicstudies%1BMAExp%40tv-basicstudies%1BBB%40tv-basicstudies',
+      'vol': 'Volume%40tv-basicstudies%1BATR%40tv-basicstudies%1BBB%40tv-basicstudies'
+    };
+
+    function setTradingViewPreset(preset) {
+      currentTradingViewPreset = preset;
+      ['tvPresetAll', 'tvPresetMomentum', 'tvPresetTrend', 'tvPresetVol'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.style.background = '';
+          el.style.color = '';
+          el.style.borderColor = '';
+        }
+      });
+      const activeBtnMap = {
+        'all': 'tvPresetAll',
+        'momentum': 'tvPresetMomentum',
+        'trend': 'tvPresetTrend',
+        'vol': 'tvPresetVol'
+      };
+      const activeEl = document.getElementById(activeBtnMap[preset]);
+      if (activeEl) {
+        activeEl.style.background = 'rgba(59,130,246,0.25)';
+        activeEl.style.color = '#60a5fa';
+        activeEl.style.borderColor = '#3b82f6';
+      }
+      const currentSym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      updateTradingViewChart(currentSym, preset);
+    }
+
+    function openFullTradingViewTab() {
+      const sym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      const tvSym = toTradingViewSymbol(sym);
+      window.open('https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(tvSym), '_blank');
+    }
+
+    function updateTradingViewChart(symbol, preset = null) {
+      if (preset) currentTradingViewPreset = preset;
       const tvSym = toTradingViewSymbol(symbol);
       document.getElementById('tvSymbolLabel').innerText = tvSym;
       
+      const studies = TV_STUDIES[currentTradingViewPreset] || TV_STUDIES['all'];
       const iframe = document.getElementById('tradingview_iframe');
       const targetSrc = "https://s.tradingview.com/widgetembed/?symbol=" + encodeURIComponent(tvSym) +
-        "&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=131722&studies=RSI%40tv-basicstudies%1BMACD%40tv-basicstudies%1BMASimple%40tv-basicstudies&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=1";
+        "&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=131722&studies=" + studies +
+        "&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=1";
       
       if (iframe.src !== targetSrc) {
         iframe.src = targetSrc;
@@ -1735,19 +2064,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tabUS = document.getElementById('tabUS');
       const tabIN = document.getElementById('tabIN');
       const tabAI = document.getElementById('tabAI');
+      const tabPractice = document.getElementById('tabPractice');
       const marketView = document.getElementById('marketView');
       const aiTraderView = document.getElementById('aiTraderView');
+      const practiceView = document.getElementById('practiceView');
 
-      if (tabKey === 'AI') {
+      if (tabKey === 'Practice') {
         if (tabUS) tabUS.className = 'market-tab';
         if (tabIN) tabIN.className = 'market-tab';
+        if (tabAI) tabAI.className = 'market-tab';
+        if (tabPractice) tabPractice.className = 'market-tab active';
+        if (marketView) marketView.style.display = 'none';
+        if (aiTraderView) aiTraderView.style.display = 'none';
+        if (practiceView) practiceView.style.display = 'block';
+        fetchPracticePortfolio();
+        fetchAIGuidance();
+      } else if (tabKey === 'AI') {
+        if (tabUS) tabUS.className = 'market-tab';
+        if (tabIN) tabIN.className = 'market-tab';
+        if (tabPractice) tabPractice.className = 'market-tab';
         if (tabAI) tabAI.className = 'market-tab active';
         if (marketView) marketView.style.display = 'none';
+        if (practiceView) practiceView.style.display = 'none';
         if (aiTraderView) aiTraderView.style.display = 'block';
         fetchPortfolio();
       } else {
         if (tabAI) tabAI.className = 'market-tab';
+        if (tabPractice) tabPractice.className = 'market-tab';
         if (aiTraderView) aiTraderView.style.display = 'none';
+        if (practiceView) practiceView.style.display = 'none';
         if (marketView) marketView.style.display = 'block';
         switchMarket(tabKey);
       }
@@ -1758,14 +2103,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const tabUS = document.getElementById('tabUS');
       const tabIN = document.getElementById('tabIN');
       const tabAI = document.getElementById('tabAI');
+      const tabPractice = document.getElementById('tabPractice');
       if (tabUS) tabUS.className = 'market-tab' + (market === 'US' ? ' active' : '');
       if (tabIN) tabIN.className = 'market-tab' + (market === 'IN' ? ' active' : '');
       if (tabAI) tabAI.className = 'market-tab';
+      if (tabPractice) tabPractice.className = 'market-tab';
       
       const marketView = document.getElementById('marketView');
       const aiTraderView = document.getElementById('aiTraderView');
+      const practiceView = document.getElementById('practiceView');
       if (marketView) marketView.style.display = 'block';
       if (aiTraderView) aiTraderView.style.display = 'none';
+      if (practiceView) practiceView.style.display = 'none';
 
       document.getElementById('tickerInput').placeholder = market === 'US' 
         ? 'Search any US stock (e.g. NVDA, AAPL, TSLA, MSFT, SPY)' 
@@ -2345,11 +2694,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const pSign = p.unrealized_pnl >= 0 ? '+' : '';
             const colorClass = p.unrealized_pnl >= 0 ? 'color: var(--green);' : 'color: var(--red);';
             const currSymbol = p.currency === 'INR' ? '₹' : '$';
+            const isINR = p.currency === 'INR' || (p.symbol && (p.symbol.endsWith('.NS') || p.symbol.endsWith('.BO')));
+
+            const entryDisplay = isINR && p.entry_price_usd 
+              ? `$${p.entry_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${p.entry_price.toFixed(2)})</span>` 
+              : `${currSymbol}${p.entry_price.toFixed(2)}`;
+            const currDisplay = isINR && p.current_price_usd 
+              ? `$${p.current_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${p.current_price.toFixed(2)})</span>` 
+              : `${currSymbol}${p.current_price.toFixed(2)}`;
+
             tr.innerHTML = `
               <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')" title="Click to open chart and 5-pillar breakdown">${p.symbol}</strong></td>
               <td style="font-family: var(--font-mono);">${p.shares}</td>
-              <td style="font-family: var(--font-mono);">${currSymbol}${p.entry_price.toFixed(2)}</td>
-              <td style="font-family: var(--font-mono);">${currSymbol}${p.current_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">${entryDisplay}</td>
+              <td style="font-family: var(--font-mono);">${currDisplay}</td>
               <td style="font-family: var(--font-mono);">$${p.invested.toFixed(2)}</td>
               <td style="font-family: var(--font-mono); font-weight: 600;">$${p.current_value.toFixed(2)}</td>
               <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${pSign}$${p.unrealized_pnl.toFixed(2)} (${pSign}${p.unrealized_pct.toFixed(2)}%)</td>
@@ -2386,15 +2744,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const tSign = t.pnl_amount >= 0 ? '+' : '';
             const colorClass = t.pnl_amount >= 0 ? 'color: var(--green);' : 'color: var(--red);';
             const currSymbol = t.currency === 'INR' ? '₹' : '$';
+            const isINR = t.currency === 'INR' || (t.symbol && (t.symbol.endsWith('.NS') || t.symbol.endsWith('.BO')));
             const resultBadge = t.result === 'WIN' 
               ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🎯 WIN</span>' 
               : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🛑 LOSS</span>';
+
+            const entryDisplay = isINR && t.entry_price_usd 
+              ? `$${t.entry_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${t.entry_price.toFixed(2)})</span>` 
+              : `${currSymbol}${t.entry_price.toFixed(2)}`;
+            const exitDisplay = isINR && t.exit_price_usd 
+              ? `$${t.exit_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${t.exit_price.toFixed(2)})</span>` 
+              : `${currSymbol}${t.exit_price.toFixed(2)}`;
+
             tr.innerHTML = `
               <td><strong style="color: #fff;">${t.symbol}</strong></td>
               <td><span class="action-chip buy">BUY</span> ➔ <span class="action-chip sell">SELL</span></td>
               <td style="font-family: var(--font-mono);"><span style="color: #60a5fa; font-weight: 700;">${t.score || '-'}</span><small style="color: #64748b;">/100</small></td>
-              <td style="font-family: var(--font-mono);">${currSymbol}${t.entry_price.toFixed(2)}</td>
-              <td style="font-family: var(--font-mono);">${currSymbol}${t.exit_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">${entryDisplay}</td>
+              <td style="font-family: var(--font-mono);">${exitDisplay}</td>
               <td style="font-family: var(--font-mono);">$${t.invested.toFixed(2)}</td>
               <td style="font-family: var(--font-mono);">$${t.proceeds.toFixed(2)}</td>
               <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${tSign}$${t.pnl_amount.toFixed(2)} (${tSign}${t.pnl_pct.toFixed(2)}%)</td>
@@ -2638,13 +3005,360 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    /* 24/7 LIVE AI SIGNALS FEED FUNCTIONS */
+    async function fetchSignalsFeed() {
+      try {
+        const res = await fetch('/api/signals-feed');
+        const signals = await res.json();
+        const tbody = document.getElementById('signalsFeedBody');
+        const countEl = document.getElementById('signalsFeedCount');
+        if (countEl) countEl.innerText = `${signals ? signals.length : 0} signals logged`;
+
+        if (!tbody) return;
+        if (!signals || signals.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 22px;">Monitoring market... Triggers with exact timestamps will stream here automatically.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = '';
+        signals.forEach(s => {
+          const tr = document.createElement('tr');
+          const isBuy = s.action === 'BUY';
+          const actionBadge = isBuy
+            ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🟢 BUY</span>'
+            : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🔴 SELL</span>';
+          const currSign = s.currency === 'INR' ? '₹' : '$';
+          const priceDisplay = s.price ? `${currSign}${s.price.toFixed(2)}` : '-';
+
+          tr.innerHTML = `
+            <td style="font-family: var(--font-mono); font-size: 11px; color: #94a3b8; white-space: nowrap;">${s.timestamp || '-'}</td>
+            <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${s.symbol}')">${s.symbol}</strong></td>
+            <td>${actionBadge}</td>
+            <td style="font-family: var(--font-mono); font-size: 11px; color: ${isBuy ? '#10b981' : '#f87171'};">${s.signal || s.action}</td>
+            <td style="font-family: var(--font-mono); font-weight: 600;">${priceDisplay}</td>
+            <td style="font-family: var(--font-mono);"><span style="color: #60a5fa; font-weight: 700;">${s.score || '-'}</span><small style="color: #64748b;">/100</small></td>
+            <td style="font-size: 11px; color: #cbd5e1; max-width: 280px; line-height: 1.4;">${s.instruction || '-'}</td>
+            <td>
+              ${isBuy 
+                ? `<button class="primary" onclick="quickBuyGuidance('${s.symbol}', ${s.price}, ${s.score || 70}, '${s.signal || 'BUY'}')" style="padding: 2px 8px; font-size: 11px; background: #10b981; border-color: #10b981;">Test in Practice</button>`
+                : `<button onclick="loadSingleStock('${s.symbol}')" style="padding: 2px 8px; font-size: 11px;">Inspect Chart</button>`
+              }
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error('Error fetching signals feed:', e);
+      }
+    }
+
+    /* PRACTICE SANDBOX & AI GUIDANCE FUNCTIONS */
+    async function fetchAIGuidance() {
+      const container = document.getElementById('aiGuidanceGrid');
+      if (container) container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 15px; text-align: center; grid-column: 1 / -1;">Evaluating live high-confluence setups...</div>';
+      try {
+        const res = await fetch('/api/guidance');
+        const picks = await res.json();
+        if (!container) return;
+
+        if (!picks || picks.length === 0) {
+          container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 15px; text-align: center; grid-column: 1 / -1;">No high-confluence (Score ≥ 60) stocks identified right now. Check back as market scans.</div>';
+          return;
+        }
+
+        container.innerHTML = '';
+        picks.forEach(p => {
+          const card = document.createElement('div');
+          card.style.cssText = 'background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between;';
+          const isINR = p.currency === 'INR' || (p.symbol && p.symbol.endsWith('.NS'));
+          const currSign = isINR ? '₹' : '$';
+          const ex = p.execution || {};
+          const sl = ex.stop_loss ? `${currSign}${ex.stop_loss.toFixed(2)}` : 'Auto 5%';
+          const tp1 = ex.take_profit_1 ? `${currSign}${ex.take_profit_1.toFixed(2)}` : 'Auto 5%';
+          const entryZone = ex.entry_zone || `${currSign}${p.current_price.toFixed(2)}`;
+
+          card.innerHTML = `
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                <div>
+                  <strong style="font-size: 15px; color: #fff; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')">${p.symbol}</strong>
+                  <div style="font-size: 11px; color: var(--text-muted);">${p.name || p.symbol}</div>
+                </div>
+                <div style="text-align: right;">
+                  <span style="font-size: 14px; font-weight: 700; color: #60a5fa; font-family: var(--font-mono);">${p.score}/100</span>
+                  <div style="font-size: 10px; color: #10b981; font-weight: 600;">${p.conviction || 'BUY'}</div>
+                </div>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin: 8px 0; padding: 6px 8px; background: var(--surface); border-radius: 4px;">
+                <span>Price: <strong>${currSign}${p.current_price.toFixed(2)}</strong></span>
+                <span style="color: var(--green);">Upside: +${(p.upside_pct || 0).toFixed(1)}%</span>
+              </div>
+              <div style="font-size: 11px; color: #cbd5e1; margin-bottom: 8px;">
+                <div>🎯 <strong>Entry:</strong> ${entryZone}</div>
+                <div style="display: flex; gap: 10px; margin-top: 3px;">
+                  <span style="color: var(--red);">🛑 SL: ${sl}</span>
+                  <span style="color: var(--green);">🎯 TP1: ${tp1}</span>
+                </div>
+              </div>
+              <div style="font-size: 10px; color: var(--text-muted); line-height: 1.3; margin-bottom: 10px; max-height: 40px; overflow: hidden;">
+                ${p.rationale || 'High confluence alignment across trend regime, momentum RSI, and institutional valuation.'}
+              </div>
+            </div>
+            <button class="primary" onclick="quickBuyGuidance('${p.symbol}', ${p.current_price}, ${p.score}, '${p.signal || 'BUY'}', ${ex.stop_loss || 0}, ${ex.take_profit_1 || 0})" style="width: 100%; padding: 6px; font-size: 12px; background: #6366f1; border-color: #6366f1;">
+              ⚡ Follow AI: Buy $250
+            </button>
+          `;
+          container.appendChild(card);
+        });
+      } catch (e) {
+        console.error('Error fetching AI guidance:', e);
+      }
+    }
+
+    async function quickBuyGuidance(symbol, price, score, signal, sl = 0, tp1 = 0) {
+      showToast(`Executing Practice Buy for ${symbol}...`);
+      try {
+        const res = await fetch('/api/practice/buy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            symbol: symbol,
+            price: price,
+            allocation: 250.0,
+            stop_loss: sl,
+            take_profit_1: tp1,
+            score: score || 70,
+            signal: signal || 'BUY',
+            currency: symbol.endsWith('.NS') || symbol.endsWith('.BO') ? 'INR' : 'USD'
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ Practice Order Filled: ${data.shares} shares of ${data.symbol} for $${data.invested}!`);
+          switchView('Practice');
+          fetchPracticePortfolio();
+        } else {
+          showToast(`Practice Buy Failed: ${data.error || 'Error'}`);
+        }
+      } catch (e) {
+        showToast('Error: ' + e);
+      }
+    }
+
+    async function submitPracticeOrder(action = 'BUY') {
+      const symInput = document.getElementById('pracInputSymbol');
+      const amtInput = document.getElementById('pracInputAmount');
+      const slInput = document.getElementById('pracInputSL');
+      const tpInput = document.getElementById('pracInputTP');
+
+      const symbol = symInput ? symInput.value.trim().toUpperCase() : '';
+      if (!symbol) {
+        showToast('Please enter a stock ticker (e.g. NVDA, AAPL, RELIANCE.NS)');
+        return;
+      }
+      const amount = amtInput ? parseFloat(amtInput.value) || 250 : 250;
+      const sl = slInput ? parseFloat(slInput.value) || 0 : 0;
+      const tp1 = tpInput ? parseFloat(tpInput.value) || 0 : 0;
+
+      showToast(`Submitting Practice ${action} for ${symbol}...`);
+      try {
+        const res = await fetch('/api/practice/buy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            symbol: symbol,
+            allocation: amount,
+            stop_loss: sl,
+            take_profit_1: tp1,
+            score: 75,
+            signal: 'MANUAL_TEST'
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ Practice Buy executed: ${data.shares} shares of ${data.symbol} for $${data.invested}!`);
+          if (symInput) symInput.value = '';
+          fetchPracticePortfolio();
+        } else {
+          showToast(`Practice Buy failed: ${data.error || 'Unknown error'}`);
+        }
+      } catch (e) {
+        showToast('Error: ' + e);
+      }
+    }
+
+    async function fetchPracticePortfolio() {
+      try {
+        const res = await fetch('/api/practice');
+        const data = await res.json();
+        updatePracticeUI(data);
+      } catch (e) {
+        console.error('Error fetching practice portfolio:', e);
+      }
+    }
+
+    function updatePracticeUI(data) {
+      if (!data) return;
+      const winRateEl = document.getElementById('pracWinRate');
+      const winLossEl = document.getElementById('pracWinLossRatio');
+      const returnEl = document.getElementById('pracTotalReturn');
+      const equityEl = document.getElementById('pracEquitySub');
+      const cashEl = document.getElementById('pracCash');
+      const realizedEl = document.getElementById('pracRealizedPnl');
+      const closedTradesEl = document.getElementById('pracClosedTrades');
+      const openMeta = document.getElementById('pracOpenMeta');
+      const openTbody = document.getElementById('pracOpenTbody');
+      const histMeta = document.getElementById('pracHistoryMeta');
+      const histTbody = document.getElementById('pracHistoryTbody');
+
+      const sign = (data.total_pnl || 0) >= 0 ? '+' : '';
+      if (winRateEl) {
+        winRateEl.innerText = `${(data.win_rate_pct || 0).toFixed(1)}%`;
+        winRateEl.style.color = (data.win_rate_pct || 0) >= 50 ? 'var(--green)' : (data.total_trades === 0 ? '#818cf8' : 'var(--red)');
+      }
+      if (winLossEl) winLossEl.innerText = `${data.wins || 0} Wins / ${data.losses || 0} Losses (${data.total_trades || 0} Closed)`;
+      if (returnEl) {
+        returnEl.innerText = `${sign}${(data.total_pnl_pct || 0).toFixed(2)}%`;
+        returnEl.style.color = (data.total_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      if (equityEl) equityEl.innerText = `Equity: $${(data.total_equity || 1000).toFixed(2)} / $1,000.00`;
+      if (cashEl) cashEl.innerText = '$' + (data.cash || 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (realizedEl) realizedEl.innerText = `${sign}$${(data.realized_pnl || 0).toFixed(2)}`;
+      if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades || 0} Closed Trades`;
+
+      // Open Positions Table
+      if (openMeta) openMeta.innerText = `${data.positions ? data.positions.length : 0} active positions`;
+      if (openTbody) {
+        if (!data.positions || data.positions.length === 0) {
+          openTbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active practice positions. Buy a stock or follow AI guidance above to test!</td></tr>';
+        } else {
+          openTbody.innerHTML = '';
+          data.positions.forEach(p => {
+            const tr = document.createElement('tr');
+            const pSign = p.unrealized_pnl >= 0 ? '+' : '';
+            const colorClass = p.unrealized_pnl >= 0 ? 'color: var(--green);' : 'color: var(--red);';
+            const currSymbol = p.currency === 'INR' ? '₹' : '$';
+            const isINR = p.currency === 'INR' || (p.symbol && (p.symbol.endsWith('.NS') || p.symbol.endsWith('.BO')));
+
+            const entryDisplay = isINR && p.entry_price_usd 
+              ? `$${p.entry_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${p.entry_price.toFixed(2)})</span>` 
+              : `${currSymbol}${p.entry_price.toFixed(2)}`;
+            const currDisplay = isINR && p.current_price_usd 
+              ? `$${p.current_price_usd.toFixed(2)} <span style="font-size: 10px; color: var(--text-muted);">(₹${p.current_price.toFixed(2)})</span>` 
+              : `${currSymbol}${p.current_price.toFixed(2)}`;
+
+            tr.innerHTML = `
+              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')">${p.symbol}</strong></td>
+              <td style="font-family: var(--font-mono);">${p.shares}</td>
+              <td style="font-family: var(--font-mono);">${entryDisplay}</td>
+              <td style="font-family: var(--font-mono);">${currDisplay}</td>
+              <td style="font-family: var(--font-mono);">$${p.invested.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 600;">$${p.current_value.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${pSign}$${p.unrealized_pnl.toFixed(2)} (${pSign}${p.unrealized_pct.toFixed(2)}%)</td>
+              <td style="font-family: var(--font-mono); color: var(--red);">${p.stop_loss ? currSymbol + p.stop_loss.toFixed(2) : '-'}</td>
+              <td style="font-family: var(--font-mono); color: var(--green);">${p.take_profit_1 ? currSymbol + p.take_profit_1.toFixed(2) : '-'}</td>
+              <td><span style="color: #60a5fa; font-weight: 700;">${p.score || 70}/100</span></td>
+              <td>
+                <button onclick="liquidatePracticePosition('${p.symbol}', ${p.current_price})" style="padding: 3px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: var(--red); border-color: rgba(239,68,68,0.3);">
+                  Liquidate
+                </button>
+              </td>
+            `;
+            openTbody.appendChild(tr);
+          });
+        }
+      }
+
+      // History Table
+      if (histMeta) histMeta.innerText = `${data.trade_history ? data.trade_history.length : 0} recorded trades`;
+      if (histTbody) {
+        if (!data.trade_history || data.trade_history.length === 0) {
+          histTbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No closed practice trades yet.</td></tr>';
+        } else {
+          histTbody.innerHTML = '';
+          data.trade_history.forEach(t => {
+            const tr = document.createElement('tr');
+            const tSign = t.pnl_amount >= 0 ? '+' : '';
+            const colorClass = t.pnl_amount >= 0 ? 'color: var(--green);' : 'color: var(--red);';
+            const currSymbol = t.currency === 'INR' ? '₹' : '$';
+            const isINR = t.currency === 'INR' || (t.symbol && (t.symbol.endsWith('.NS') || t.symbol.endsWith('.BO')));
+            const resultBadge = t.result === 'WIN' 
+              ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🎯 WIN</span>' 
+              : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🛑 LOSS</span>';
+
+            const entryDisplay = isINR && t.entry_price_usd 
+              ? `$${t.entry_price_usd.toFixed(2)} (₹${t.entry_price.toFixed(2)})` 
+              : `${currSymbol}${t.entry_price.toFixed(2)}`;
+            const exitDisplay = isINR && t.exit_price_usd 
+              ? `$${t.exit_price_usd.toFixed(2)} (₹${t.exit_price.toFixed(2)})` 
+              : `${currSymbol}${t.exit_price.toFixed(2)}`;
+
+            tr.innerHTML = `
+              <td><strong style="color: #fff;">${t.symbol}</strong></td>
+              <td><span class="action-chip buy">BUY</span> ➔ <span class="action-chip sell">SELL</span></td>
+              <td style="font-family: var(--font-mono);">${t.score || '-'}</td>
+              <td style="font-family: var(--font-mono);">${entryDisplay}</td>
+              <td style="font-family: var(--font-mono);">${exitDisplay}</td>
+              <td style="font-family: var(--font-mono);">$${t.invested.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">$${t.proceeds.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${tSign}$${t.pnl_amount.toFixed(2)} (${tSign}${t.pnl_pct.toFixed(2)}%)</td>
+              <td>${resultBadge}</td>
+              <td style="font-size: 11px; color: #cbd5e1;">${t.exit_reason || 'MANUAL'}</td>
+              <td style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">${t.exit_time || '-'}</td>
+            `;
+            histTbody.appendChild(tr);
+          });
+        }
+      }
+    }
+
+    async function liquidatePracticePosition(symbol, price) {
+      if (!confirm(`Liquidate practice position for ${symbol}?`)) return;
+      try {
+        const res = await fetch('/api/practice/sell', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({symbol: symbol, price: price, reason: 'MANUAL_PRACTICE_EXIT'})
+        });
+        const data = await res.json();
+        if (data.success) {
+          const sign = data.pnl >= 0 ? '+' : '';
+          showToast(`✓ Sold ${symbol}: Realized P&L ${sign}$${data.pnl} (${sign}${data.pnl_pct}%)`);
+          fetchPracticePortfolio();
+        } else {
+          showToast(`Sell failed: ${data.error || 'Error'}`);
+        }
+      } catch (e) {
+        showToast('Error: ' + e);
+      }
+    }
+
+    async function resetPracticeCredits() {
+      if (!confirm('Reset Practice Sandbox back to $1,000.00 virtual credits?')) return;
+      try {
+        const res = await fetch('/api/practice/reset', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'}
+        });
+        const data = await res.json();
+        updatePracticeUI(data);
+        showToast('✓ Practice sandbox reset to $1,000.00 virtual credits.');
+      } catch (e) {
+        showToast('Error resetting: ' + e);
+      }
+    }
+
     // Startup
     loadConfig();
     switchMarket('US');
     fetchMarketOverview(false);
     fetchAlertsHistory();
     fetchPortfolio();
+    fetchPracticePortfolio();
+    fetchSignalsFeed();
     setInterval(fetchPortfolio, 10000);
+    setInterval(fetchPracticePortfolio, 10000);
+    setInterval(fetchSignalsFeed, 10000);
     setInterval(fetchAlertsHistory, 15000);
     setInterval(() => fetchMarketOverview(false), 60000);
   </script>
@@ -2736,6 +3450,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
             self.send_json(portfolio.get_summary(live_prices))
 
+        elif path == "/api/signals-feed":
+            self.send_json(list(reversed(signals_feed[-50:])))
+
+        elif path == "/api/practice":
+            live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
+            self.send_json(practice_portfolio.get_summary(live_prices))
+
+        elif path == "/api/guidance":
+            top_guidance = [
+                r for r in cached_results.values()
+                if r.get("score", 0) >= 60 and r.get("current_price", 0) > 0
+            ]
+            top_guidance.sort(key=lambda x: x.get("score", 0), reverse=True)
+            self.send_json(top_guidance[:6])
+
         elif path == "/api/portfolio/report":
             live_prices = {sym: res.get("current_price", 0.0) for sym, res in cached_results.items() if res.get("current_price")}
             summary = portfolio.get_summary(live_prices)
@@ -2775,6 +3504,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
             reason = payload.get("reason", "MANUAL")
             res = portfolio.sell(sym, price, exit_reason=reason)
             self.send_json(res)
+
+        elif path == "/api/practice/buy":
+            sym = payload.get("symbol", "").upper().strip()
+            price = float(payload.get("price", 0.0))
+            if price <= 0 and sym in cached_results:
+                price = float(cached_results[sym].get("current_price", 0.0))
+            if price <= 0:
+                raw = client.get_full_analysis(client.resolve_symbol(sym))
+                if raw and raw.get("analyst"):
+                    price = float(raw["analyst"].get("current_price", 0.0))
+            allocation = float(payload.get("allocation", 250.0))
+            sl = float(payload.get("stop_loss", 0.0))
+            tp1 = float(payload.get("take_profit_1", 0.0))
+            tp2 = float(payload.get("take_profit_2", 0.0))
+            score = int(payload.get("score", 50))
+            signal = payload.get("signal", "BUY")
+            curr = payload.get("currency", "INR" if sym.endswith((".NS", ".BO")) else "USD")
+            res = practice_portfolio.buy(sym, price, allocation, sl, tp1, tp2, score, signal, curr)
+            self.send_json(res)
+
+        elif path == "/api/practice/sell":
+            sym = payload.get("symbol", "").upper().strip()
+            price = float(payload.get("price", 0.0))
+            if price <= 0 and sym in cached_results:
+                price = float(cached_results[sym].get("current_price", 0.0))
+            reason = payload.get("reason", "MANUAL_PRACTICE")
+            res = practice_portfolio.sell(sym, price, exit_reason=reason)
+            self.send_json(res)
+
+        elif path == "/api/practice/reset":
+            summary = practice_portfolio.reset()
+            self.send_json(summary)
 
         elif path == "/api/portfolio/auto-invest" or path == "/api/portfolio/auto-trade-now":
             market = payload.get("market", "US").upper()
