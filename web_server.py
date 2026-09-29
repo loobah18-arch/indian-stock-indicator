@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+from datetime import datetime, timezone
 import threading
 import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -72,55 +73,56 @@ def background_market_monitor_loop():
             if auto_monitor_enabled:
                 notifier = Notifier(discord_webhook_url=config.get("discord_webhook_url"))
                 all_syms = config.get("watchlist_us", []) + config.get("watchlist_india", [])
-                for s in all_syms:
-                    if not auto_monitor_enabled:
-                        break
-                    try:
-                        resolved = client.resolve_symbol(s)
-                        raw = client.get_full_analysis(resolved)
-                        if raw and raw.get("analyst"):
-                            res = strategy.analyze(raw)
-                            cached_results[res["symbol"]] = res
-                            triggers = res.get("triggers", {})
-                            buy_t = triggers.get("buy", {})
-                            sell_t = triggers.get("sell", {})
 
-                            if buy_t.get("triggered"):
-                                key = (res["symbol"], "BUY")
-                                if key not in alerted_triggers:
-                                    notifier.send_trade_alert(res, "BUY")
-                                    alerted_triggers.add(key)
-                            else:
-                                alerted_triggers.discard((res["symbol"], "BUY"))
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    future_to_sym = {executor.submit(client.get_full_analysis, client.resolve_symbol(s)): s for s in all_syms}
+                    for future in as_completed(future_to_sym):
+                        try:
+                            raw = future.result()
+                            if raw and raw.get("analyst"):
+                                res = strategy.analyze(raw)
+                                cached_results[res["symbol"]] = res
+                                triggers = res.get("triggers", {})
+                                buy_t = triggers.get("buy", {})
+                                sell_t = triggers.get("sell", {})
 
-                            if sell_t.get("triggered"):
-                                key = (res["symbol"], sell_t.get("type", "SELL"))
-                                if key not in alerted_triggers:
-                                    notifier.send_trade_alert(res, "SELL")
-                                    alerted_triggers.add(key)
-                            else:
-                                for st in ["TAKE_PROFIT_1", "TAKE_PROFIT_2", "STOP_LOSS_HIT", "OVERBOUGHT_TRIM", "BEARISH_BREAKDOWN"]:
-                                    alerted_triggers.discard((res["symbol"], st))
-                    except Exception:
-                        pass
+                                if buy_t.get("triggered"):
+                                    key = (res["symbol"], "BUY")
+                                    if key not in alerted_triggers:
+                                        notifier.send_trade_alert(res, "BUY")
+                                        alerted_triggers.add(key)
+                                else:
+                                    alerted_triggers.discard((res["symbol"], "BUY"))
+
+                                if sell_t.get("triggered"):
+                                    key = (res["symbol"], sell_t.get("type", "SELL"))
+                                    if key not in alerted_triggers:
+                                        notifier.send_trade_alert(res, "SELL")
+                                        alerted_triggers.add(key)
+                                else:
+                                    for st in ["TAKE_PROFIT_1", "TAKE_PROFIT_2", "STOP_LOSS_HIT", "OVERBOUGHT_TRIM", "BEARISH_BREAKDOWN"]:
+                                        alerted_triggers.discard((res["symbol"], st))
+                        except Exception:
+                            pass
 
                 # Autonomous AI Trading: deploy virtual credits into top confluence setups & execute TP/SL exits
                 if ai_auto_trading_enabled and cached_results:
                     try:
                         trade_res = portfolio.process_autonomous_signals(list(cached_results.values()), max_positions=4)
+                        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                         for b in trade_res.get("buys_executed", []):
-                            print(f"[AI AUTONOMOUS TRADER] BUY: {b['symbol']} {b['shares']} shares @ ${b['price']} | Score: {b.get('score')}")
+                            print(f"[{now_ts}] [AI AUTONOMOUS TRADER] BUY: {b['symbol']} | ${b['invested']} invested ({b['shares']} shares @ ${b['price']}) | Score: {b.get('score')}/100 | Cash Left: ${b.get('remaining_cash')}")
                         for s in trade_res.get("sells_executed", []):
                             sign = '+' if s.get('pnl', 0) >= 0 else ''
-                            print(f"[AI AUTONOMOUS TRADER] SELL: {s['symbol']} @ ${s['exit_price']} | P&L: {sign}${s.get('pnl')} ({s.get('result')}) | Reason: {s.get('exit_reason')}")
-                    except Exception:
-                        pass
+                            print(f"[{now_ts}] [AI AUTONOMOUS TRADER] SELL: {s['symbol']} @ ${s['exit_price']} | P&L: {sign}${s.get('pnl')} ({s.get('result')}) | Reason: {s.get('exit_reason')}")
+                    except Exception as e:
+                        print(f"[AI AUTO TRADER ERROR] {e}")
                 elif portfolio.positions:
                     live_prices = {sym: r.get("current_price", 0.0) for sym, r in cached_results.items() if r.get("current_price")}
                     portfolio.evaluate_live_stops(live_prices)
-        except Exception:
-            pass
-        time.sleep(180)
+        except Exception as e:
+            print(f"[BACKGROUND MONITOR ERROR] {e}")
+        time.sleep(60)
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
