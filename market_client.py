@@ -239,12 +239,12 @@ class MarketClient:
         sym = self.resolve_symbol(symbol)
         tf = timeframe.lower().strip()
         tf_map = {
-            "1m": ("1m", "1d"),
+            "1m": ("1m", "5d"),
             "5m": ("5m", "5d"),
-            "15m": ("15m", "5d"),
+            "15m": ("15m", "1mo"),
             "30m": ("30m", "1mo"),
-            "60m": ("60m", "1mo"),
-            "1h": ("60m", "1mo"),
+            "60m": ("60m", "3mo"),
+            "1h": ("60m", "3mo"),
             "1d": ("1d", "1y"),
             "1w": ("1wk", "2y"),
         }
@@ -278,7 +278,7 @@ class MarketClient:
                 if c is not None and h is not None and l is not None:
                     records.append({"close": c, "high": h, "low": l, "volume": v or 0})
 
-            if len(records) < 30:
+            if len(records) < 20:
                 return None
 
             closes = [r["close"] for r in records]
@@ -317,8 +317,9 @@ class MarketClient:
 
             # Bollinger Bands (20 periods, 2 std)
             slice20 = closes[-20:]
-            sma20 = sum(slice20) / 20.0
-            variance = sum((x - sma20) ** 2 for x in slice20) / 20.0
+            slice_len = max(len(slice20), 1)
+            sma20 = sum(slice20) / slice_len
+            variance = sum((x - sma20) ** 2 for x in slice20) / slice_len
             std20 = math.sqrt(variance)
             upper_bb = round(sma20 + (2.0 * std20), 2)
             lower_bb = round(sma20 - (2.0 * std20), 2)

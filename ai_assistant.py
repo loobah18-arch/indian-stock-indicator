@@ -193,18 +193,20 @@ class AIAssistant:
         # Format open positions
         pos_lines = []
         for p in open_pos:
+            c_sym = "₹" if (p.get("currency") == "INR" or p.get("symbol", "").endswith((".NS", ".BO"))) else "$"
             pos_lines.append(
-                f"- **{p['symbol']}**: {p['shares']} shares @ ${p['entry_price']} | Curr: ${p['current_price']} | "
+                f"- **{p['symbol']}**: {p['shares']} shares @ {c_sym}{p['entry_price']} | Curr: {c_sym}{p['current_price']} | "
                 f"Unrealized P&L: ${p['unrealized_pnl']:+,.2f} ({p['unrealized_pct']:+,.2f}%) | "
-                f"SL: ${p.get('stop_loss')} | TP1: ${p.get('take_profit_1')} | Confluence Score: {p.get('score')}/100"
+                f"SL: {c_sym}{p.get('stop_loss')} | TP1: {c_sym}{p.get('take_profit_1')} | Confluence Score: {p.get('score')}/100"
             )
         pos_str = "\n".join(pos_lines) if pos_lines else "None (100% Cash / Inactive)"
 
         # Format closed trades
         trade_lines = []
         for t in history[:10]:
+            c_sym = "₹" if (t.get("currency") == "INR" or t.get("symbol", "").endswith((".NS", ".BO"))) else "$"
             trade_lines.append(
-                f"- **{t['symbol']}**: Entry ${t['entry_price']} -> Exit ${t['exit_price']} | "
+                f"- **{t['symbol']}**: Entry {c_sym}{t['entry_price']} -> Exit {c_sym}{t['exit_price']} | "
                 f"P&L: ${t['pnl_amount']:+,.2f} ({t['pnl_pct']:+,.2f}%) | Result: {t['result']} | Trigger: {t['exit_reason']}"
             )
         history_str = "\n".join(trade_lines) if trade_lines else "No closed trades yet (trades are currently live/in-flight)."

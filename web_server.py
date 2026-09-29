@@ -16,6 +16,11 @@ from notifier import Notifier, get_alert_history
 from ai_assistant import AIAssistant
 from paper_trading import PaperPortfolio, PracticePortfolio, get_usd_inr_rate
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 PORT = 5000
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SIGNALS_FEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signals_feed.json")
@@ -2253,7 +2258,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('heroSymbol').innerText = data.symbol;
       document.getElementById('heroName').innerText = data.name || data.symbol;
 
-      const curr = data.currency || (data.symbol.includes('.NS') ? 'INR' : 'USD');
+      const curr = data.currency || (data.symbol.includes('.NS') || data.symbol.includes('.BO') ? 'INR' : 'USD');
       const cSign = curr === 'USD' ? '$' : '₹';
 
       const price = data.current_price || 0;
@@ -3640,50 +3645,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/portfolio/buy":
             sym = payload.get("symbol", "").upper().strip()
+            if not sym:
+                self.send_json({"success": False, "error": "Missing symbol"}, 400)
+                return
+            sym = client.resolve_symbol(sym)
             price = float(payload.get("price", 0.0))
+            if price <= 0 and sym in cached_results:
+                price = float(cached_results[sym].get("current_price", 0.0))
+            if price <= 0:
+                raw = client.get_full_analysis(sym)
+                if raw and raw.get("analyst"):
+                    price = float(raw["analyst"].get("current_price", 0.0))
+                    cached_results[sym] = strategy.analyze(raw)
+            if price <= 0:
+                self.send_json({"success": False, "error": f"Could not fetch live price for {sym}"}, 400)
+                return
             allocation = float(payload.get("allocation", 250.0))
             sl = float(payload.get("stop_loss", 0.0))
             tp1 = float(payload.get("take_profit_1", 0.0))
             tp2 = float(payload.get("take_profit_2", 0.0))
             score = int(payload.get("score", 50))
             signal = payload.get("signal", "BUY")
-            curr = payload.get("currency", "USD")
+            curr = payload.get("currency") or ("INR" if sym.endswith((".NS", ".BO")) else "USD")
             res = portfolio.buy(sym, price, allocation, sl, tp1, tp2, score, signal, curr)
             self.send_json(res)
 
         elif path == "/api/portfolio/sell":
             sym = payload.get("symbol", "").upper().strip()
+            resolved = client.resolve_symbol(sym)
+            target_sym = sym if sym in portfolio.positions else resolved
             price = float(payload.get("price", 0.0))
+            if price <= 0 and target_sym in cached_results:
+                price = float(cached_results[target_sym].get("current_price", 0.0))
+            if price <= 0:
+                raw = client.get_full_analysis(target_sym)
+                if raw and raw.get("analyst"):
+                    price = float(raw["analyst"].get("current_price", 0.0))
             reason = payload.get("reason", "MANUAL")
-            res = portfolio.sell(sym, price, exit_reason=reason)
+            res = portfolio.sell(target_sym, price, exit_reason=reason)
             self.send_json(res)
 
         elif path == "/api/practice/buy":
             sym = payload.get("symbol", "").upper().strip()
+            if not sym:
+                self.send_json({"success": False, "error": "Missing symbol"}, 400)
+                return
+            sym = client.resolve_symbol(sym)
             price = float(payload.get("price", 0.0))
             if price <= 0 and sym in cached_results:
                 price = float(cached_results[sym].get("current_price", 0.0))
             if price <= 0:
-                raw = client.get_full_analysis(client.resolve_symbol(sym))
+                raw = client.get_full_analysis(sym)
                 if raw and raw.get("analyst"):
                     price = float(raw["analyst"].get("current_price", 0.0))
+                    cached_results[sym] = strategy.analyze(raw)
+            if price <= 0:
+                self.send_json({"success": False, "error": f"Could not fetch live price for {sym}"}, 400)
+                return
             allocation = float(payload.get("allocation", 250.0))
             sl = float(payload.get("stop_loss", 0.0))
             tp1 = float(payload.get("take_profit_1", 0.0))
             tp2 = float(payload.get("take_profit_2", 0.0))
             score = int(payload.get("score", 50))
             signal = payload.get("signal", "BUY")
-            curr = payload.get("currency", "INR" if sym.endswith((".NS", ".BO")) else "USD")
+            curr = payload.get("currency") or ("INR" if sym.endswith((".NS", ".BO")) else "USD")
             res = practice_portfolio.buy(sym, price, allocation, sl, tp1, tp2, score, signal, curr)
             self.send_json(res)
 
         elif path == "/api/practice/sell":
             sym = payload.get("symbol", "").upper().strip()
+            resolved = client.resolve_symbol(sym)
+            target_sym = sym if sym in practice_portfolio.positions else resolved
             price = float(payload.get("price", 0.0))
-            if price <= 0 and sym in cached_results:
-                price = float(cached_results[sym].get("current_price", 0.0))
+            if price <= 0 and target_sym in cached_results:
+                price = float(cached_results[target_sym].get("current_price", 0.0))
+            if price <= 0:
+                raw = client.get_full_analysis(target_sym)
+                if raw and raw.get("analyst"):
+                    price = float(raw["analyst"].get("current_price", 0.0))
             reason = payload.get("reason", "MANUAL_PRACTICE")
-            res = practice_portfolio.sell(sym, price, exit_reason=reason)
+            res = practice_portfolio.sell(target_sym, price, exit_reason=reason)
             self.send_json(res)
 
         elif path == "/api/practice/reset":

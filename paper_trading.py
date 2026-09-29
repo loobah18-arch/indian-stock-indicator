@@ -137,11 +137,12 @@ class PaperPortfolio:
             old = self.positions[symbol]
             tot_shares = old["shares"] + shares
             tot_invested = old["invested"] + actual_invested
-            avg_price = round(tot_invested / tot_shares, 2)
+            avg_price_usd = round(tot_invested / tot_shares, 4) if tot_shares > 0 else price_usd
+            avg_price_native = round(avg_price_usd * fx_rate, 2) if is_inr else avg_price_usd
             old["shares"] = round(tot_shares, 4)
             old["invested"] = round(tot_invested, 2)
-            old["entry_price"] = avg_price
-            old["entry_price_usd"] = round(avg_price / fx_rate, 4) if is_inr else avg_price
+            old["entry_price"] = avg_price_native
+            old["entry_price_usd"] = avg_price_usd
             old["fx_rate"] = fx_rate
             old["stop_loss"] = stop_loss or old["stop_loss"]
             old["take_profit_1"] = take_profit_1 or old["take_profit_1"]
@@ -193,7 +194,7 @@ class PaperPortfolio:
 
         gross_proceeds = round(shares * price_usd, 2)
         pnl = round(gross_proceeds - portion_invested, 2)
-        pnl_pct = round(((price - pos["entry_price"]) / pos["entry_price"]) * 100, 2)
+        pnl_pct = round(((price - pos["entry_price"]) / pos["entry_price"]) * 100, 2) if pos.get("entry_price") else 0.0
 
         self.cash = round(self.cash + gross_proceeds, 2)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -268,6 +269,7 @@ class PaperPortfolio:
             sl = pos.get("stop_loss", 0.0)
             tp1 = pos.get("take_profit_1", 0.0)
             tp2 = pos.get("take_profit_2", 0.0)
+            c_sym = "₹" if (pos.get("currency") == "INR" or sym.endswith((".NS", ".BO"))) else "$"
 
             # Find matching stock analysis for sell triggers
             stock_data = next((s for s in analyzed_stocks if s.get("symbol") == sym), None)
@@ -280,7 +282,7 @@ class PaperPortfolio:
                     sym,
                     curr_price,
                     exit_reason="STOP_LOSS_HIT",
-                    ai_rationale=f"ATR Stop Loss hit at ${curr_price:.2f} (SL level: ${sl:.2f}). Capital protected."
+                    ai_rationale=f"ATR Stop Loss hit at {c_sym}{curr_price:.2f} (SL level: {c_sym}{sl:.2f}). Capital protected."
                 )
                 sells_executed.append(res)
             # Exit rule 2: TP2 target reached
@@ -289,7 +291,7 @@ class PaperPortfolio:
                     sym,
                     curr_price,
                     exit_reason="TAKE_PROFIT_2",
-                    ai_rationale=f"Take-Profit 2 reached at ${curr_price:.2f} (Analyst Target was ${tp2:.2f}). Full target captured."
+                    ai_rationale=f"Take-Profit 2 reached at {c_sym}{curr_price:.2f} (Analyst Target was {c_sym}{tp2:.2f}). Full target captured."
                 )
                 sells_executed.append(res)
             # Exit rule 3: TP1 target reached
@@ -298,7 +300,7 @@ class PaperPortfolio:
                     sym,
                     curr_price,
                     exit_reason="TAKE_PROFIT_1",
-                    ai_rationale=f"Take-Profit 1 reached at ${curr_price:.2f} (Target was ${tp1:.2f}). Profit booked."
+                    ai_rationale=f"Take-Profit 1 reached at {c_sym}{curr_price:.2f} (Target was {c_sym}{tp1:.2f}). Profit booked."
                 )
                 sells_executed.append(res)
             # Exit rule 4: Severe Bearish breakdown or Overbought Trim trigger
@@ -378,18 +380,19 @@ class PaperPortfolio:
             sl = pos.get("stop_loss", 0.0)
             tp1 = pos.get("take_profit_1", 0.0)
             tp2 = pos.get("take_profit_2", 0.0)
+            c_sym = "₹" if (pos.get("currency") == "INR" or sym.endswith((".NS", ".BO"))) else "$"
 
             # Condition 1: Stop-loss breached
             if sl > 0 and curr_price <= sl:
-                res = self.sell(sym, curr_price, exit_reason="STOP_LOSS_HIT", ai_rationale=f"ATR Stop Loss hit at ${curr_price:.2f} (SL was ${sl:.2f})")
+                res = self.sell(sym, curr_price, exit_reason="STOP_LOSS_HIT", ai_rationale=f"ATR Stop Loss hit at {c_sym}{curr_price:.2f} (SL was {c_sym}{sl:.2f})")
                 executed_exits.append(res)
             # Condition 2: TP2 secondary target reached
             elif tp2 > 0 and curr_price >= tp2:
-                res = self.sell(sym, curr_price, exit_reason="TAKE_PROFIT_2", ai_rationale=f"Take Profit 2 target hit at ${curr_price:.2f}")
+                res = self.sell(sym, curr_price, exit_reason="TAKE_PROFIT_2", ai_rationale=f"Take Profit 2 target hit at {c_sym}{curr_price:.2f}")
                 executed_exits.append(res)
             # Condition 3: TP1 swing target reached
             elif tp1 > 0 and curr_price >= tp1:
-                res = self.sell(sym, curr_price, exit_reason="TAKE_PROFIT_1", ai_rationale=f"Take Profit 1 target hit at ${curr_price:.2f}")
+                res = self.sell(sym, curr_price, exit_reason="TAKE_PROFIT_1", ai_rationale=f"Take Profit 1 target hit at {c_sym}{curr_price:.2f}")
                 executed_exits.append(res)
 
         return executed_exits

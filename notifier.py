@@ -3,7 +3,7 @@ import json
 import subprocess
 import requests
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 ALERT_HISTORY: List[Dict[str, Any]] = []
 
