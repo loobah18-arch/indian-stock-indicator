@@ -234,10 +234,22 @@ class MarketClient:
             atr = (atr * (period - 1) + tr[i]) / period
         return round(atr, 2)
 
-    def get_technical_data(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch 1-year daily chart history and compute technicals (EMAs, MACD, RSI, BB, ATR, RVOL)."""
+    def get_technical_data(self, symbol: str, timeframe: str = "1d") -> Optional[Dict[str, Any]]:
+        """Fetch chart history and compute technicals (EMAs, MACD, RSI, BB, ATR, RVOL) across 1m, 5m, 15m, 30m, 1h, 1d."""
         sym = self.resolve_symbol(symbol)
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=1y"
+        tf = timeframe.lower().strip()
+        tf_map = {
+            "1m": ("1m", "1d"),
+            "5m": ("5m", "5d"),
+            "15m": ("15m", "5d"),
+            "30m": ("30m", "1mo"),
+            "60m": ("60m", "1mo"),
+            "1h": ("60m", "1mo"),
+            "1d": ("1d", "1y"),
+            "1w": ("1wk", "2y"),
+        }
+        interval, range_str = tf_map.get(tf, ("1d", "1y"))
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval={interval}&range={range_str}"
 
         try:
             resp = self.session.get(url, timeout=12)
@@ -365,15 +377,16 @@ class MarketClient:
                 "low_52w": low_52w,
                 "dist_from_52w_high_pct": dist_from_52w_high_pct,
                 "sparkline": sparkline,
+                "timeframe": tf,
             }
         except Exception:
             return None
 
-    def get_full_analysis(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_full_analysis(self, symbol: str, timeframe: str = "1d") -> Optional[Dict[str, Any]]:
         """Combine institutional analyst consensus and deep quantitative technicals for US or Indian ticker."""
         resolved = self.resolve_symbol(symbol)
         analyst = self.get_analyst_data(resolved)
-        technical = self.get_technical_data(resolved)
+        technical = self.get_technical_data(resolved, timeframe=timeframe)
 
         if not analyst and not technical:
             return None
@@ -382,6 +395,7 @@ class MarketClient:
             "symbol": resolved,
             "analyst": analyst,
             "technical": technical,
+            "timeframe": timeframe,
         }
 
     def get_market_overview(self, market: str = "US") -> Dict[str, Any]:

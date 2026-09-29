@@ -2,7 +2,32 @@
   "starting_balance": 1000.0,
   "cash": 1000.0,
   "created_at": "2026-09-29T11:22:19.678792+00:00",
-  "updated_at": "2026-09-29T11:22:19.678825+00:00",
+  "updated_at": "2026-09-29T12:16:14.105107+00:00",
   "positions": {},
-  "trade_history": []
+  "trade_history": [
+    {
+      "id": "trade_NVDA_1790684174",
+      "symbol": "NVDA",
+      "entry_price": 228.86,
+      "entry_price_usd": 228.86,
+      "exit_price": 228.86,
+      "exit_price_usd": 228.86,
+      "fx_rate": 1.0,
+      "shares": 1.0924,
+      "invested": 250.01,
+      "proceeds": 250.01,
+      "pnl_amount": 0.0,
+      "pnl_pct": 0.0,
+      "result": "WIN",
+      "score": 92,
+      "signal": "STRONG BUY",
+      "conviction": "HIGH",
+      "buy_rationale": "",
+      "exit_reason": "MANUAL_PRACTICE_EXIT",
+      "exit_rationale": "MANUAL_PRACTICE_EXIT",
+      "entry_time": "2026-09-29 12:15:27 UTC",
+      "exit_time": "2026-09-29 12:16:14 UTC",
+      "currency": "USD"
+    }
+  ]
 }

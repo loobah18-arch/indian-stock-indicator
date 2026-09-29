@@ -1314,9 +1314,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- Real-Time TradingView Candlestick Chart (Direct Embed Iframe) -->
     <div class="chart-card">
       <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span>TradingView Real-Time Candlestick Chart</span>
-          <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 600; color: var(--blue);">NASDAQ:NVDA</span>
+          <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 600; color: var(--blue);">NASDAQ:NVDA • [1D]</span>
+          <!-- Interactive Timeframe Selector -->
+          <div style="display: flex; align-items: center; gap: 3px; background: rgba(15,23,42,0.6); padding: 2px 4px; border-radius: 4px; border: 1px solid var(--border);">
+            <button class="macro-btn tf-btn" id="tfBtn_1m" onclick="setChartTimeframe('1m', '1')" style="padding: 2px 6px; font-size: 11px;">1m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_5m" onclick="setChartTimeframe('5m', '5')" style="padding: 2px 6px; font-size: 11px;">5m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_15m" onclick="setChartTimeframe('15m', '15')" style="padding: 2px 6px; font-size: 11px;">15m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_30m" onclick="setChartTimeframe('30m', '30')" style="padding: 2px 6px; font-size: 11px;">30m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_1h" onclick="setChartTimeframe('1h', '60')" style="padding: 2px 6px; font-size: 11px;">1H</button>
+            <button class="macro-btn tf-btn active" id="tfBtn_1d" onclick="setChartTimeframe('1d', 'D')" style="padding: 2px 6px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">1D</button>
+            <button class="macro-btn tf-btn" id="tfBtn_1w" onclick="setChartTimeframe('1w', 'W')" style="padding: 2px 6px; font-size: 11px;">1W</button>
+          </div>
         </div>
         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
           <button class="macro-btn" id="tvPresetAll" onclick="setTradingViewPreset('all')" style="padding: 2px 7px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">🔥 All Indicators</button>
@@ -2031,15 +2041,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       window.open('https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(tvSym), '_blank');
     }
 
+    let currentChartTimeframe = 'D'; // TradingView interval: '1', '5', '15', '30', '60', 'D', 'W'
+    let currentAnalysisTimeframe = '1d'; // '1m', '5m', '15m', '30m', '1h', '1d', '1w'
+
+    function setChartTimeframe(analysisTf, tvInterval) {
+      currentChartTimeframe = tvInterval;
+      currentAnalysisTimeframe = analysisTf;
+
+      ['1m', '5m', '15m', '30m', '1h', '1d', '1w'].forEach(t => {
+        const el = document.getElementById('tfBtn_' + t);
+        if (el) {
+          el.style.background = '';
+          el.style.color = '';
+          el.style.borderColor = '';
+        }
+      });
+      const activeEl = document.getElementById('tfBtn_' + analysisTf);
+      if (activeEl) {
+        activeEl.style.background = 'rgba(59,130,246,0.25)';
+        activeEl.style.color = '#60a5fa';
+        activeEl.style.borderColor = '#3b82f6';
+      }
+
+      const currentSym = activeResult ? activeResult.symbol : (currentMarket === 'US' ? 'NVDA' : 'RELIANCE.NS');
+      updateTradingViewChart(currentSym);
+      analyzeSpecific(currentSym, analysisTf);
+    }
+
     function updateTradingViewChart(symbol, preset = null) {
       if (preset) currentTradingViewPreset = preset;
       const tvSym = toTradingViewSymbol(symbol);
-      document.getElementById('tvSymbolLabel').innerText = tvSym;
+      const tfLabel = currentChartTimeframe === 'D' ? '1D' : (currentChartTimeframe === 'W' ? '1W' : (currentChartTimeframe === '60' ? '1H' : currentChartTimeframe + 'm'));
+      document.getElementById('tvSymbolLabel').innerText = `${tvSym} • [${tfLabel}]`;
       
       const studies = TV_STUDIES[currentTradingViewPreset] || TV_STUDIES['all'];
       const iframe = document.getElementById('tradingview_iframe');
       const targetSrc = "https://s.tradingview.com/widgetembed/?symbol=" + encodeURIComponent(tvSym) +
-        "&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=131722&studies=" + studies +
+        "&interval=" + encodeURIComponent(currentChartTimeframe) +
+        "&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=131722&studies=" + studies +
         "&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=1";
       
       if (iframe.src !== targetSrc) {
@@ -2126,12 +2165,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       scanMarketWatchlist(false);
     }
 
-    async function analyzeSpecific(sym) {
-      showToast('Analyzing ' + sym + '...');
+    async function analyzeSpecific(sym, tf = null) {
+      const activeTf = tf || currentAnalysisTimeframe || '1d';
+      showToast(`Analyzing ${sym} [${activeTf.toUpperCase()}]...`);
       updateTradingViewChart(sym);
 
       try {
-        const res = await fetch('/api/analyze?ticker=' + encodeURIComponent(sym));
+        const res = await fetch('/api/analyze?ticker=' + encodeURIComponent(sym) + '&timeframe=' + encodeURIComponent(activeTf));
         const data = await res.json();
         if (data && data.symbol) {
           renderActiveTicker(data);
@@ -2151,7 +2191,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function renderActiveTicker(data) {
       activeResult = data;
-      document.getElementById('updateTime').innerText = 'Live • ' + new Date().toLocaleTimeString();
+      const tfText = (data.timeframe || currentAnalysisTimeframe || '1D').toUpperCase();
+      document.getElementById('updateTime').innerText = `Live • [${tfText}] • ` + new Date().toLocaleTimeString();
       document.getElementById('heroSymbol').innerText = data.symbol;
       document.getElementById('heroName').innerText = data.name || data.symbol;
 
@@ -3395,15 +3436,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/analyze":
             ticker = query.get("ticker", [""])[0]
+            tf = query.get("timeframe", ["1d"])[0].lower()
             if not ticker:
                 self.send_json({"error": "Missing ticker parameter"}, 400)
                 return
             resolved = client.resolve_symbol(ticker)
-            raw = client.get_full_analysis(resolved)
+            raw = client.get_full_analysis(resolved, timeframe=tf)
             if not raw or not raw.get("analyst"):
                 self.send_json({"error": f"Failed to fetch data for {resolved}"}, 404)
                 return
             result = strategy.analyze(raw)
+            result["timeframe"] = tf
             cached_results[result["symbol"]] = result
             self.send_json(result)
 
