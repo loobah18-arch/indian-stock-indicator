@@ -1834,7 +1834,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
       
-      <!-- Quick Ticker Suggestions -->
+      <!-- Quick Ticker Suggestions (Buy & Active Holdings for Sell) -->
       <div style="margin-top: 8px; margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px;">
         <span style="color: var(--text-muted); font-weight: 600;">Quick Pick:</span>
         <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('NVDA')" style="padding: 2px 7px; font-size: 11px;">NVDA</button>
@@ -1846,6 +1846,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('ICICIBANK.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">ICICIBANK.NS</button>
         <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('TCS.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">TCS.NS</button>
         <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('INFY.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">INFY.NS</button>
+        <span id="pracHoldingsChips" style="display: inline-flex; align-items: center; gap: 4px;"></span>
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: flex-end;">
@@ -1855,7 +1856,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label style="font-size: 11px; color: var(--text-muted); display: block;">Allocation ($ USD)</label>
+            <label style="font-size: 11px; color: var(--text-muted); display: block;">Buy Allocation ($ USD)</label>
             <div style="display: flex; gap: 4px;">
               <span onclick="quickFillPracticeAmount(100)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$100</span>
               <span onclick="quickFillPracticeAmount(250)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$250</span>
@@ -1872,14 +1873,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Take Profit (Optional)</label>
           <input type="number" id="pracInputTP" placeholder="Auto 5% TP" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
         </div>
-        <div>
-          <button class="primary" onclick="submitPracticeOrder('BUY')" style="width: 100%; padding: 8px 12px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 13px; cursor: pointer;">
-            🛒 Buy into Practice
+        <div style="display: flex; gap: 6px;">
+          <button class="primary" onclick="submitPracticeOrder('BUY')" style="flex: 1; padding: 8px 6px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 12px; cursor: pointer; white-space: nowrap;">
+            🛒 Buy Stock
+          </button>
+          <button type="button" onclick="submitPracticeOrder('SELL')" style="flex: 1; padding: 8px 6px; background: #ef4444; border-color: #ef4444; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; white-space: nowrap;">
+            🔴 Sell / Close
           </button>
         </div>
       </div>
-      <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">
-        💡 Auto-manages risk: If Stop Loss or Take Profit are left blank, a safe 5% risk bracket is automatically assigned. Indian stocks are auto-converted to USD value.
+      <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px;">
+        <span>💡 <strong>BUY:</strong> Deploys credits into a position. <strong>SELL / CLOSE:</strong> Exits the holding for the specified ticker and books realized P&L into your cash balance.</span>
+        <span>Auto 5% Stop-Loss & Take-Profit applied if left blank.</span>
       </div>
     </div>
 
@@ -3299,22 +3304,49 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    async function submitPracticeOrder(action = 'BUY') {
+    async function submitPracticeOrder(action = 'BUY', specificSym = null) {
       const symInput = document.getElementById('pracInputSymbol');
       const amtInput = document.getElementById('pracInputAmount');
       const slInput = document.getElementById('pracInputSL');
       const tpInput = document.getElementById('pracInputTP');
 
-      const symbol = symInput ? symInput.value.trim().toUpperCase() : '';
+      const symbol = (specificSym || (symInput ? symInput.value : '')).trim().toUpperCase();
       if (!symbol) {
-        showToast('Please enter a stock ticker (e.g. NVDA, AAPL, RELIANCE.NS)');
+        showToast('Please enter or select a stock ticker to ' + (action === 'SELL' ? 'sell' : 'buy'));
         return;
       }
+
+      if (action === 'SELL') {
+        showToast(`Submitting Practice Sell for ${symbol}...`);
+        try {
+          const res = await fetch('/api/practice/sell', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              symbol: symbol,
+              reason: 'MANUAL_PRACTICE_SELL'
+            })
+          });
+          const data = await res.json();
+          if (data.success) {
+            const sign = (data.pnl || 0) >= 0 ? '+' : '';
+            showToast(`✓ Sold ${data.symbol}: Realized P&L ${sign}$${data.pnl} (${sign}${data.pnl_pct}%)!`);
+            if (symInput && symInput.value.toUpperCase().trim() === symbol) symInput.value = '';
+            fetchPracticePortfolio();
+          } else {
+            showToast(`Practice Sell failed: ${data.error || 'Check position'}`);
+          }
+        } catch (e) {
+          showToast('Error selling: ' + e);
+        }
+        return;
+      }
+
       const amount = amtInput ? parseFloat(amtInput.value) || 250 : 250;
       const sl = slInput ? parseFloat(slInput.value) || 0 : 0;
       const tp1 = tpInput ? parseFloat(tpInput.value) || 0 : 0;
 
-      showToast(`Submitting Practice ${action} for ${symbol}...`);
+      showToast(`Submitting Practice Buy for ${symbol}...`);
       try {
         const res = await fetch('/api/practice/buy', {
           method: 'POST',
@@ -3331,7 +3363,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await res.json();
         if (data.success) {
           showToast(`✓ Practice Buy executed: ${data.shares} shares of ${data.symbol} for $${data.invested}!`);
-          if (symInput) symInput.value = '';
+          if (symInput && symInput.value.toUpperCase().trim() === symbol) symInput.value = '';
           fetchPracticePortfolio();
         } else {
           showToast(`Practice Buy failed: ${data.error || 'Unknown error'}`);
@@ -3382,6 +3414,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (realizedEl) realizedEl.innerText = `${sign}$${(data.realized_pnl || 0).toFixed(2)}`;
       if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades || 0} Closed Trades`;
 
+      // Holdings chips for quick sell in console
+      const holdingsContainer = document.getElementById('pracHoldingsChips');
+      if (holdingsContainer) {
+        if (data.positions && data.positions.length > 0) {
+          holdingsContainer.innerHTML = '<span style="color: var(--border); margin: 0 2px;">|</span><span style="color: #f87171; font-weight: 600;">Holdings to Sell:</span>' + 
+            data.positions.map(p => `<button type="button" class="macro-btn" onclick="quickFillPracticeTicker('${p.symbol}')" style="padding: 2px 7px; font-size: 11px; color: #f87171; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.1);">🔴 ${p.symbol} (${p.shares})</button>`).join(' ');
+        } else {
+          holdingsContainer.innerHTML = '';
+        }
+      }
+
       // Open Positions Table
       if (openMeta) openMeta.innerText = `${data.positions ? data.positions.length : 0} active positions`;
       if (openTbody) {
@@ -3415,8 +3458,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <td style="font-family: var(--font-mono); color: var(--green);">${p.take_profit_1 ? currSymbol + p.take_profit_1.toFixed(2) : '-'}</td>
               <td><span style="color: #60a5fa; font-weight: 700;">${p.score || 70}/100</span></td>
               <td>
-                <button onclick="liquidatePracticePosition('${p.symbol}', ${p.current_price})" style="padding: 3px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: var(--red); border-color: rgba(239,68,68,0.3);">
-                  Liquidate
+                <button onclick="submitPracticeOrder('SELL', '${p.symbol}')" style="padding: 4px 10px; font-size: 11px; background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid #ef4444; border-radius: 4px; font-weight: 700; cursor: pointer;">
+                  🔴 Sell / Exit
                 </button>
               </td>
             `;
