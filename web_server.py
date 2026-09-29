@@ -1259,20 +1259,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Market Selector, AI Autonomous Trader & Practice Tabs -->
+    <!-- Main Market & Fund Navigation Tabs -->
     <div class="market-tabs">
       <div class="market-tab active" id="tabUS" onclick="switchView('US')">
-        <span>🇺🇸 US Market (NASDAQ / NYSE)</span>
+        <span>🇺🇸 US Stocks</span>
       </div>
       <div class="market-tab" id="tabIN" onclick="switchView('IN')">
-        <span>🇮🇳 Indian Market (NSE / BSE)</span>
+        <span>🇮🇳 India Stocks</span>
       </div>
       <div class="market-tab" id="tabAI" onclick="switchView('AI')">
-        <span>🤖 AI Autonomous Fund & Trade Records ($1,000)</span>
-        <span id="aiTabLivePill" style="background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; margin-left: 6px;">AUTO: ON</span>
+        <span>🤖 AI Auto-Trader ($1,000)</span>
+        <span id="aiTabLivePill" style="background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; margin-left: 5px;">ACTIVE</span>
       </div>
       <div class="market-tab" id="tabPractice" onclick="switchView('Practice')">
-        <span>🎮 Practice Sandbox & AI Guidance ($1,000)</span>
+        <span>🎮 Practice Sandbox ($1,000)</span>
+        <span style="background: rgba(99,102,241,0.2); color: #818cf8; border: 1px solid rgba(99,102,241,0.4); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; margin-left: 5px;">TEST LAB</span>
       </div>
     </div>
 
@@ -1313,27 +1314,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- Real-Time TradingView Candlestick Chart (Direct Embed Iframe) -->
     <div class="chart-card">
-      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-          <span>TradingView Real-Time Candlestick Chart</span>
-          <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 600; color: var(--blue);">NASDAQ:NVDA • [1D]</span>
-          <!-- Interactive Timeframe Selector -->
-          <div style="display: flex; align-items: center; gap: 3px; background: rgba(15,23,42,0.6); padding: 2px 4px; border-radius: 4px; border: 1px solid var(--border);">
-            <button class="macro-btn tf-btn" id="tfBtn_1m" onclick="setChartTimeframe('1m', '1')" style="padding: 2px 6px; font-size: 11px;">1m</button>
-            <button class="macro-btn tf-btn" id="tfBtn_5m" onclick="setChartTimeframe('5m', '5')" style="padding: 2px 6px; font-size: 11px;">5m</button>
-            <button class="macro-btn tf-btn" id="tfBtn_15m" onclick="setChartTimeframe('15m', '15')" style="padding: 2px 6px; font-size: 11px;">15m</button>
-            <button class="macro-btn tf-btn" id="tfBtn_30m" onclick="setChartTimeframe('30m', '30')" style="padding: 2px 6px; font-size: 11px;">30m</button>
-            <button class="macro-btn tf-btn" id="tfBtn_1h" onclick="setChartTimeframe('1h', '60')" style="padding: 2px 6px; font-size: 11px;">1H</button>
-            <button class="macro-btn tf-btn active" id="tfBtn_1d" onclick="setChartTimeframe('1d', 'D')" style="padding: 2px 6px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">1D</button>
-            <button class="macro-btn tf-btn" id="tfBtn_1w" onclick="setChartTimeframe('1w', 'W')" style="padding: 2px 6px; font-size: 11px;">1W</button>
+      <div class="card-title" style="flex-direction: column; gap: 8px; align-items: stretch;">
+        <!-- Row 1: Symbol Badge + Timeframe Bar -->
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-weight: 700;">📊 Candlestick Chart</span>
+            <span id="tvSymbolLabel" style="font-family: var(--font-mono); font-weight: 700; color: #60a5fa; background: rgba(59,130,246,0.15); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3);">NASDAQ:NVDA • [1D]</span>
+          </div>
+          <!-- Timeframe selector -->
+          <div style="display: flex; align-items: center; gap: 3px; background: rgba(15,23,42,0.7); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);">
+            <span style="font-size: 10px; color: var(--text-muted); font-weight: 600; margin-right: 3px; text-transform: uppercase;">TF:</span>
+            <button class="macro-btn tf-btn" id="tfBtn_1m" onclick="setChartTimeframe('1m', '1')" style="padding: 2px 7px; font-size: 11px;">1m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_5m" onclick="setChartTimeframe('5m', '5')" style="padding: 2px 7px; font-size: 11px;">5m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_15m" onclick="setChartTimeframe('15m', '15')" style="padding: 2px 7px; font-size: 11px;">15m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_30m" onclick="setChartTimeframe('30m', '30')" style="padding: 2px 7px; font-size: 11px;">30m</button>
+            <button class="macro-btn tf-btn" id="tfBtn_1h" onclick="setChartTimeframe('1h', '60')" style="padding: 2px 7px; font-size: 11px;">1H</button>
+            <button class="macro-btn tf-btn active" id="tfBtn_1d" onclick="setChartTimeframe('1d', 'D')" style="padding: 2px 7px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">1D</button>
+            <button class="macro-btn tf-btn" id="tfBtn_1w" onclick="setChartTimeframe('1w', 'W')" style="padding: 2px 7px; font-size: 11px;">1W</button>
           </div>
         </div>
-        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-          <button class="macro-btn" id="tvPresetAll" onclick="setTradingViewPreset('all')" style="padding: 2px 7px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">🔥 All Indicators</button>
-          <button class="macro-btn" id="tvPresetMomentum" onclick="setTradingViewPreset('momentum')" style="padding: 2px 7px; font-size: 11px;">⚡ Momentum</button>
-          <button class="macro-btn" id="tvPresetTrend" onclick="setTradingViewPreset('trend')" style="padding: 2px 7px; font-size: 11px;">📈 Trend</button>
-          <button class="macro-btn" id="tvPresetVol" onclick="setTradingViewPreset('vol')" style="padding: 2px 7px; font-size: 11px;">🌊 Vol & ATR</button>
-          <button class="macro-btn" onclick="openFullTradingViewTab()" style="padding: 2px 7px; font-size: 11px; background: rgba(16,185,129,0.15); color: #10b981; border-color: rgba(16,185,129,0.4);">↗ Open TV Pro</button>
+        <!-- Row 2: Indicator Presets + Fullscreen Link -->
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">
+          <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+            <span style="font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Indicators:</span>
+            <button class="macro-btn" id="tvPresetAll" onclick="setTradingViewPreset('all')" style="padding: 2px 8px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">🔥 All Indicators</button>
+            <button class="macro-btn" id="tvPresetMomentum" onclick="setTradingViewPreset('momentum')" style="padding: 2px 8px; font-size: 11px;">⚡ Momentum (RSI/MACD)</button>
+            <button class="macro-btn" id="tvPresetTrend" onclick="setTradingViewPreset('trend')" style="padding: 2px 8px; font-size: 11px;">📈 Trend (EMAs/BB)</button>
+            <button class="macro-btn" id="tvPresetVol" onclick="setTradingViewPreset('vol')" style="padding: 2px 8px; font-size: 11px;">🌊 Volume & ATR</button>
+          </div>
+          <button class="macro-btn" onclick="openFullTradingViewTab()" style="padding: 2px 8px; font-size: 11px; background: rgba(16,185,129,0.15); color: #10b981; border-color: rgba(16,185,129,0.4);">↗ Full TradingView</button>
         </div>
       </div>
       <div class="tradingview-container">
@@ -1546,8 +1555,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="macro-btn" onclick="fetchSignalsFeed()" style="padding: 2px 8px; font-size: 11px;">↻ Refresh</button>
         </div>
       </div>
-      <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-        Continuously scans market data 24/7 in the background and logs exact BUY / SELL trigger timestamps, price targets, and rationale.
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
+        <div style="font-size: 12px; color: var(--text-muted);">
+          Scans live markets 24/7 and records exact Buy/Sell triggers, entry zones, and risk boundaries.
+        </div>
+        <div style="display: flex; gap: 4px;">
+          <button class="macro-btn" id="sigFilterAll" onclick="filterSignalsFeed('ALL')" style="padding: 2px 8px; font-size: 11px; background: rgba(59,130,246,0.25); color: #60a5fa; border-color: #3b82f6;">All Signals</button>
+          <button class="macro-btn" id="sigFilterBuy" onclick="filterSignalsFeed('BUY')" style="padding: 2px 8px; font-size: 11px;">🟢 BUY Triggers</button>
+          <button class="macro-btn" id="sigFilterSell" onclick="filterSignalsFeed('SELL')" style="padding: 2px 8px; font-size: 11px;">🔴 SELL Triggers</button>
+        </div>
       </div>
       <div class="table-container" style="max-height: 340px; overflow-y: auto;">
         <table>
@@ -1603,6 +1619,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           ↺ Reset ($1,000)
         </button>
       </div>
+    </div>
+
+    <!-- Friendly Guidance Callout -->
+    <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+      <div style="font-size: 12px; color: #93c5fd; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 16px;">🤖</span>
+        <span><strong>Autonomous AI Fund:</strong> The AI trades this $1,000 portfolio on its own 24/7 to audit predictive accuracy. Want to place your own trades with virtual cash? Use the <strong>Practice Sandbox</strong> tab.</span>
+      </div>
+      <button class="macro-btn" onclick="switchView('Practice')" style="padding: 4px 10px; font-size: 11px; background: rgba(99,102,241,0.25); color: #c7d2fe; border-color: rgba(99,102,241,0.5);">
+        Open Practice Sandbox ➔
+      </button>
     </div>
 
     <!-- Probability & Accuracy Verification Matrix -->
@@ -1792,32 +1819,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- Practice Manual Order Console -->
     <div class="card" style="margin-top: 18px;">
-      <div class="card-title">
-        <span>⚡ Practice Trade Execution Console</span>
-        <span style="font-size: 11px; color: var(--text-muted);">Execute manual orders using virtual credits</span>
+      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>⚡ Practice Trade Execution Console</span>
+          <span style="font-size: 11px; color: var(--text-muted);">Execute manual trades with virtual credits</span>
+        </div>
+        <div style="font-size: 12px; font-family: var(--font-mono);">
+          Available Cash: <span id="pracConsoleCash" style="color: #10b981; font-weight: 700;">$1,000.00</span>
+        </div>
       </div>
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 10px; align-items: flex-end;">
+      
+      <!-- Quick Ticker Suggestions -->
+      <div style="margin-top: 8px; margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px;">
+        <span style="color: var(--text-muted); font-weight: 600;">Quick Pick:</span>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('NVDA')" style="padding: 2px 7px; font-size: 11px;">NVDA</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('AAPL')" style="padding: 2px 7px; font-size: 11px;">AAPL</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('TSLA')" style="padding: 2px 7px; font-size: 11px;">TSLA</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('MSFT')" style="padding: 2px 7px; font-size: 11px;">MSFT</button>
+        <span style="color: var(--border); margin: 0 2px;">|</span>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('RELIANCE.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">RELIANCE.NS</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('ICICIBANK.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">ICICIBANK.NS</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('TCS.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">TCS.NS</button>
+        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('INFY.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">INFY.NS</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: flex-end;">
         <div>
           <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticker Symbol</label>
           <input type="text" id="pracInputSymbol" placeholder="e.g. NVDA, RELIANCE.NS" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
         </div>
         <div>
-          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Allocation ($ USD)</label>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label style="font-size: 11px; color: var(--text-muted); display: block;">Allocation ($ USD)</label>
+            <div style="display: flex; gap: 4px;">
+              <span onclick="quickFillPracticeAmount(100)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$100</span>
+              <span onclick="quickFillPracticeAmount(250)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$250</span>
+              <span onclick="quickFillPracticeAmount(500)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$500</span>
+            </div>
+          </div>
           <input type="number" id="pracInputAmount" value="250" min="10" max="1000" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
         </div>
         <div>
           <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Custom Stop Loss (Optional)</label>
-          <input type="number" id="pracInputSL" placeholder="Auto 5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+          <input type="number" id="pracInputSL" placeholder="Auto 5% SL" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
         </div>
         <div>
           <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Take Profit (Optional)</label>
-          <input type="number" id="pracInputTP" placeholder="Auto 5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+          <input type="number" id="pracInputTP" placeholder="Auto 5% TP" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
         </div>
         <div>
-          <button class="primary" onclick="submitPracticeOrder('BUY')" style="width: 100%; padding: 8px 12px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 13px;">
+          <button class="primary" onclick="submitPracticeOrder('BUY')" style="width: 100%; padding: 8px 12px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 13px; cursor: pointer;">
             🛒 Buy into Practice
           </button>
         </div>
+      </div>
+      <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">
+        💡 Auto-manages risk: If Stop Loss or Take Profit are left blank, a safe 5% risk bracket is automatically assigned. Indian stocks are auto-converted to USD value.
       </div>
     </div>
 
@@ -3047,47 +3104,81 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     /* 24/7 LIVE AI SIGNALS FEED FUNCTIONS */
+    let currentSignalsFeed = [];
+    let currentSignalsFilter = 'ALL';
+
+    function renderSignalsFeed(signals) {
+      const tbody = document.getElementById('signalsFeedBody');
+      const countEl = document.getElementById('signalsFeedCount');
+      if (countEl) countEl.innerText = `${signals ? signals.length : 0} signals logged`;
+
+      if (!tbody) return;
+      if (!signals || signals.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 22px;">No signals matching filter. Triggers with exact timestamps will stream here automatically.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = '';
+      signals.forEach(s => {
+        const tr = document.createElement('tr');
+        const isBuy = s.action === 'BUY';
+        const actionBadge = isBuy
+          ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🟢 BUY</span>'
+          : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🔴 SELL</span>';
+        const currSign = s.currency === 'INR' ? '₹' : '$';
+        const priceDisplay = s.price ? `${currSign}${s.price.toFixed(2)}` : '-';
+
+        tr.innerHTML = `
+          <td style="font-family: var(--font-mono); font-size: 11px; color: #94a3b8; white-space: nowrap;">${s.timestamp || '-'}</td>
+          <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${s.symbol}')">${s.symbol}</strong></td>
+          <td>${actionBadge}</td>
+          <td style="font-family: var(--font-mono); font-size: 11px; color: ${isBuy ? '#10b981' : '#f87171'};">${s.signal || s.action}</td>
+          <td style="font-family: var(--font-mono); font-weight: 600;">${priceDisplay}</td>
+          <td style="font-family: var(--font-mono);"><span style="color: #60a5fa; font-weight: 700;">${s.score || '-'}</span><small style="color: #64748b;">/100</small></td>
+          <td style="font-size: 11px; color: #cbd5e1; max-width: 280px; line-height: 1.4;">${s.instruction || '-'}</td>
+          <td>
+            ${isBuy 
+              ? `<button class="primary" onclick="quickBuyGuidance('${s.symbol}', ${s.price}, ${s.score || 70}, '${s.signal || 'BUY'}')" style="padding: 2px 8px; font-size: 11px; background: #10b981; border-color: #10b981; cursor: pointer;">Test in Practice</button>`
+              : `<button onclick="loadSingleStock('${s.symbol}')" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">Inspect Chart</button>`
+            }
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function filterSignalsFeed(filter) {
+      currentSignalsFilter = filter;
+      ['sigFilterAll', 'sigFilterBuy', 'sigFilterSell'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.style.background = '';
+          el.style.color = '';
+          el.style.borderColor = '';
+        }
+      });
+      const activeEl = document.getElementById(filter === 'ALL' ? 'sigFilterAll' : (filter === 'BUY' ? 'sigFilterBuy' : 'sigFilterSell'));
+      if (activeEl) {
+        activeEl.style.background = filter === 'BUY' ? 'rgba(16,185,129,0.25)' : (filter === 'SELL' ? 'rgba(239,68,68,0.25)' : 'rgba(59,130,246,0.25)');
+        activeEl.style.color = filter === 'BUY' ? '#10b981' : (filter === 'SELL' ? '#f87171' : '#60a5fa');
+        activeEl.style.borderColor = filter === 'BUY' ? '#10b981' : (filter === 'SELL' ? '#ef4444' : '#3b82f6');
+      }
+
+      let filtered = currentSignalsFeed;
+      if (filter === 'BUY') {
+        filtered = currentSignalsFeed.filter(s => s.action === 'BUY');
+      } else if (filter === 'SELL') {
+        filtered = currentSignalsFeed.filter(s => s.action === 'SELL');
+      }
+      renderSignalsFeed(filtered);
+    }
+
     async function fetchSignalsFeed() {
       try {
         const res = await fetch('/api/signals-feed');
         const signals = await res.json();
-        const tbody = document.getElementById('signalsFeedBody');
-        const countEl = document.getElementById('signalsFeedCount');
-        if (countEl) countEl.innerText = `${signals ? signals.length : 0} signals logged`;
-
-        if (!tbody) return;
-        if (!signals || signals.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 22px;">Monitoring market... Triggers with exact timestamps will stream here automatically.</td></tr>';
-          return;
-        }
-
-        tbody.innerHTML = '';
-        signals.forEach(s => {
-          const tr = document.createElement('tr');
-          const isBuy = s.action === 'BUY';
-          const actionBadge = isBuy
-            ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🟢 BUY</span>'
-            : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🔴 SELL</span>';
-          const currSign = s.currency === 'INR' ? '₹' : '$';
-          const priceDisplay = s.price ? `${currSign}${s.price.toFixed(2)}` : '-';
-
-          tr.innerHTML = `
-            <td style="font-family: var(--font-mono); font-size: 11px; color: #94a3b8; white-space: nowrap;">${s.timestamp || '-'}</td>
-            <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${s.symbol}')">${s.symbol}</strong></td>
-            <td>${actionBadge}</td>
-            <td style="font-family: var(--font-mono); font-size: 11px; color: ${isBuy ? '#10b981' : '#f87171'};">${s.signal || s.action}</td>
-            <td style="font-family: var(--font-mono); font-weight: 600;">${priceDisplay}</td>
-            <td style="font-family: var(--font-mono);"><span style="color: #60a5fa; font-weight: 700;">${s.score || '-'}</span><small style="color: #64748b;">/100</small></td>
-            <td style="font-size: 11px; color: #cbd5e1; max-width: 280px; line-height: 1.4;">${s.instruction || '-'}</td>
-            <td>
-              ${isBuy 
-                ? `<button class="primary" onclick="quickBuyGuidance('${s.symbol}', ${s.price}, ${s.score || 70}, '${s.signal || 'BUY'}')" style="padding: 2px 8px; font-size: 11px; background: #10b981; border-color: #10b981;">Test in Practice</button>`
-                : `<button onclick="loadSingleStock('${s.symbol}')" style="padding: 2px 8px; font-size: 11px;">Inspect Chart</button>`
-              }
-            </td>
-          `;
-          tbody.appendChild(tr);
-        });
+        currentSignalsFeed = signals || [];
+        filterSignalsFeed(currentSignalsFilter);
       } catch (e) {
         console.error('Error fetching signals feed:', e);
       }
@@ -3186,6 +3277,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function quickFillPracticeTicker(sym) {
+      const input = document.getElementById('pracInputSymbol');
+      if (input) {
+        input.value = sym;
+        input.focus();
+        showToast(`Selected ${sym} in Practice console`);
+      }
+    }
+
+    function quickFillPracticeAmount(amt) {
+      const input = document.getElementById('pracInputAmount');
+      if (input) {
+        input.value = amt;
+        showToast(`Set practice allocation to $${amt}`);
+      }
+    }
+
     async function submitPracticeOrder(action = 'BUY') {
       const symInput = document.getElementById('pracInputSymbol');
       const amtInput = document.getElementById('pracInputAmount');
@@ -3264,6 +3372,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       if (equityEl) equityEl.innerText = `Equity: $${(data.total_equity || 1000).toFixed(2)} / $1,000.00`;
       if (cashEl) cashEl.innerText = '$' + (data.cash || 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      const consoleCashEl = document.getElementById('pracConsoleCash');
+      if (consoleCashEl) consoleCashEl.innerText = '$' + (data.cash || 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       if (realizedEl) realizedEl.innerText = `${sign}$${(data.realized_pnl || 0).toFixed(2)}`;
       if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades || 0} Closed Trades`;
 
@@ -3480,7 +3590,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             results.sort(key=lambda x: x.get("score", 0), reverse=True)
             self.send_json(results)
 
-        elif path == "/api/market-overview":
+        elif path in ["/api/market-overview", "/api/overview"]:
             market = query.get("market", ["US"])[0].upper()
             overview = client.get_market_overview(market)
             self.send_json(overview)
@@ -3744,6 +3854,7 @@ def run_server(port: int = PORT):
     monitor_thread = threading.Thread(target=background_market_monitor_loop, daemon=True)
     monitor_thread.start()
 
+    ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     print(f"\n=======================================================")
     print(f"🚀 AI Market Terminal & Chatbot Live on Localhost!")
