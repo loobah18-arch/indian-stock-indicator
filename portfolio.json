@@ -1,8 +1,89 @@
 {
   "starting_balance": 1000.0,
-  "cash": 1000.0,
+  "cash": 14.98,
   "created_at": "2026-09-29T01:28:26.259924+00:00",
-  "updated_at": "2026-09-29T01:28:26.268313+00:00",
-  "positions": {},
-  "trade_history": []
+  "updated_at": "2026-09-29T06:51:17.803207+00:00",
+  "positions": {
+    "ICICIBANK.NS": {
+      "symbol": "ICICIBANK.NS",
+      "entry_price": 1302.5,
+      "shares": 0.1919,
+      "invested": 249.95,
+      "entry_time": "2026-09-29 06:39:32 UTC",
+      "stop_loss": 1273.23,
+      "take_profit_1": 1348.09,
+      "take_profit_2": 1746.7382,
+      "score": 47,
+      "signal": "HOLD",
+      "currency": "INR"
+    },
+    "QQQ": {
+      "symbol": "QQQ",
+      "entry_price": 736.53,
+      "shares": 0.3394,
+      "invested": 249.98,
+      "entry_time": "2026-09-29 06:51:06 UTC",
+      "stop_loss": 721.8,
+      "take_profit_1": 762.31,
+      "take_profit_2": 788.09,
+      "score": 80,
+      "signal": "STRONG BUY",
+      "conviction": "Ultra High Conviction",
+      "ai_rationale": "\ud83d\udfe2 WHEN TO BUY: Enter between $732.62\u2013$738.49. SL at $721.80 (-2.0%). Target TP1: $762.31 (+3.5%).",
+      "currency": "USD"
+    },
+    "MSFT": {
+      "symbol": "MSFT",
+      "entry_price": 509.22,
+      "shares": 0.4909,
+      "invested": 249.98,
+      "entry_time": "2026-09-29 06:51:06 UTC",
+      "stop_loss": 491.33,
+      "take_profit_1": 535.47,
+      "take_profit_2": 577.26135,
+      "score": 76,
+      "signal": "BUY",
+      "conviction": "High Conviction",
+      "ai_rationale": "\ud83d\udfe2 WHEN TO BUY: Enter between $504.45\u2013$511.61. SL at $491.33 (-3.51%). Target TP1: $535.47 (+5.15%).",
+      "currency": "USD"
+    },
+    "NVDA": {
+      "symbol": "NVDA",
+      "entry_price": 228.86,
+      "shares": 1.0924,
+      "invested": 250.01,
+      "entry_time": "2026-09-29 06:51:17 UTC",
+      "stop_loss": 219.82,
+      "take_profit_1": 242.13,
+      "take_profit_2": 327.7,
+      "score": 92,
+      "signal": "STRONG BUY",
+      "conviction": "Ultra High Conviction",
+      "ai_rationale": "\ud83d\udfe2 WHEN TO BUY: Enter between $226.45\u2013$230.07. SL at $219.82 (-3.95%). Target TP1: $242.13 (+5.8%).",
+      "currency": "USD"
+    }
+  },
+  "trade_history": [
+    {
+      "id": "trade_NVDA_1790664676",
+      "symbol": "NVDA",
+      "entry_price": 228.86,
+      "exit_price": 242.5,
+      "shares": 1.0924,
+      "invested": 250.01,
+      "proceeds": 264.91,
+      "pnl_amount": 14.9,
+      "pnl_pct": 5.96,
+      "result": "WIN",
+      "score": 92,
+      "signal": "STRONG BUY",
+      "conviction": "Ultra High Conviction",
+      "buy_rationale": "\ud83d\udfe2 WHEN TO BUY: Enter between $226.45\u2013$230.07. SL at $219.82 (-3.95%). Target TP1: $242.13 (+5.8%).",
+      "exit_reason": "TP1_TARGET_HIT",
+      "exit_rationale": "TP1_TARGET_HIT",
+      "entry_time": "2026-09-29 06:51:06 UTC",
+      "exit_time": "2026-09-29 06:51:16 UTC",
+      "currency": "USD"
+    }
+  ]
 }

@@ -23,6 +23,7 @@ def load_config() -> Dict[str, Any]:
         "discord_webhook_url": "",
         "enable_termux_notification": True,
         "auto_monitor_enabled": True,
+        "ai_auto_trading_enabled": True,
         "min_upside_for_buy_pct": 5.0,
         "rsi_overbought": 72.0,
         "rsi_oversold": 30.0,
@@ -61,10 +62,11 @@ portfolio = PaperPortfolio()
 
 cached_results: Dict[str, Any] = {}
 auto_monitor_enabled = config.get("auto_monitor_enabled", True)
+ai_auto_trading_enabled = config.get("ai_auto_trading_enabled", True)
 alerted_triggers = set()
 
 def background_market_monitor_loop():
-    """Background daemon that periodically scans watchlists, checks portfolio stop losses, and dispatches Buy and Sell alerts."""
+    """Background daemon that periodically scans watchlists, checks portfolio stop losses, executes autonomous trades, and dispatches alerts."""
     while True:
         try:
             if auto_monitor_enabled:
@@ -102,8 +104,18 @@ def background_market_monitor_loop():
                     except Exception:
                         pass
 
-                # Check active virtual portfolio positions against live prices for TP / SL hits
-                if portfolio.positions:
+                # Autonomous AI Trading: deploy virtual credits into top confluence setups & execute TP/SL exits
+                if ai_auto_trading_enabled and cached_results:
+                    try:
+                        trade_res = portfolio.process_autonomous_signals(list(cached_results.values()), max_positions=4)
+                        for b in trade_res.get("buys_executed", []):
+                            print(f"[AI AUTONOMOUS TRADER] BUY: {b['symbol']} {b['shares']} shares @ ${b['price']} | Score: {b.get('score')}")
+                        for s in trade_res.get("sells_executed", []):
+                            sign = '+' if s.get('pnl', 0) >= 0 else ''
+                            print(f"[AI AUTONOMOUS TRADER] SELL: {s['symbol']} @ ${s['exit_price']} | P&L: {sign}${s.get('pnl')} ({s.get('result')}) | Reason: {s.get('exit_reason')}")
+                    except Exception:
+                        pass
+                elif portfolio.positions:
                     live_prices = {sym: r.get("current_price", 0.0) for sym, r in cached_results.items() if r.get("current_price")}
                     portfolio.evaluate_live_stops(live_prices)
         except Exception:
@@ -509,6 +521,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .modal-body strong {
       color: #f8fafc;
+    }
+
+    /* AI Autonomous Trader Tab Styling */
+    .ai-live-banner {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.06) 100%);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .ai-live-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .pulsing-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 10px var(--green);
+      animation: pulseDot 2s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.35); opacity: 0.55; }
+    }
+    .action-chip {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+    .action-chip.buy { background: rgba(16, 185, 129, 0.18); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.35); }
+    .action-chip.sell { background: rgba(239, 68, 68, 0.18); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.35); }
+    .accuracy-matrix {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .accuracy-card {
+      background: #141926;
+      border: 1px solid #242f44;
+      border-radius: 6px;
+      padding: 12px 14px;
     }
 
     /* Alerts Drawer */
@@ -1117,18 +1183,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Market Selector Tabs -->
+    <!-- Market Selector & AI Autonomous Trader Tabs -->
     <div class="market-tabs">
-      <div class="market-tab active" id="tabUS" onclick="switchMarket('US')">
+      <div class="market-tab active" id="tabUS" onclick="switchView('US')">
         <span>🇺🇸 US Market (NASDAQ / NYSE)</span>
       </div>
-      <div class="market-tab" id="tabIN" onclick="switchMarket('IN')">
+      <div class="market-tab" id="tabIN" onclick="switchView('IN')">
         <span>🇮🇳 Indian Market (NSE / BSE)</span>
+      </div>
+      <div class="market-tab" id="tabAI" onclick="switchView('AI')">
+        <span>🤖 AI Autonomous Fund & Trade Records ($1,000)</span>
+        <span id="aiTabLivePill" style="background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4); font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 700; margin-left: 6px;">AUTO: ON</span>
       </div>
     </div>
 
-    <!-- Macro Market Regime & Broad Market Analysis -->
-    <div class="macro-section" id="macroSection">
+    <!-- ============================================== -->
+    <!-- VIEW 1: LIVE MARKET ANALYSIS (US & INDIA)      -->
+    <!-- ============================================== -->
+    <div id="marketView">
+      <!-- Macro Market Regime & Broad Market Analysis -->
+      <div class="macro-section" id="macroSection">
       <div class="macro-banner" id="macroBanner">
         <div class="macro-regime-row">
           <div class="macro-regime-badge" id="macroRegimeBadge">
@@ -1360,115 +1434,158 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </table>
       </div>
     </div>
+  </div> <!-- end #marketView -->
 
-    <!-- VIRTUAL $1,000 AI PORTFOLIO & PROBABILITY AUDIT SECTION -->
-    <div class="card" style="margin-top: 20px;" id="portfolioSection">
-      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 14px; font-weight: 700; color: #fff;">💼 Virtual $1,000 AI Paper Portfolio</span>
-          <span class="ai-model-badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3);">Signal Verification Mode</span>
-        </div>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button class="primary" onclick="autoInvestTopPicks()" style="background: #10b981; border-color: #10b981; font-weight: 600;" title="Deploy virtual credits into top scoring confluence setups">
-            🤖 Auto-Invest $1,000 in Top AI Picks
-          </button>
-          <button class="primary" onclick="openAIReportModal()" style="background: #8b5cf6; border-color: #8b5cf6; font-weight: 600;" title="Generate institutional AI P&L and probability verification report">
-            📊 Generate AI P&L Report
-          </button>
-          <button onclick="resetPortfolioCredits()" style="border-color: #475569;" title="Reset virtual credits back to $1,000.00">
-            ↺ Reset ($1,000)
-          </button>
+  <!-- ============================================== -->
+  <!-- VIEW 2: DEDICATED AI AUTONOMOUS TRADER VIEW    -->
+  <!-- ============================================== -->
+  <div id="aiTraderView" style="display: none; margin-top: 15px;">
+    <!-- AI Autonomous Status & Control Banner -->
+    <div class="ai-live-banner">
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div class="pulsing-dot" id="aiEngineDot"></div>
+        <div>
+          <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+            <span>🤖 AI Autonomous Fund Engine ($1,000 Portfolio)</span>
+            <span id="aiAutoBadge" class="ai-model-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.4);">AUTONOMOUS: ACTIVE</span>
+          </div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;" id="aiEngineSubtitle">
+            Continuous background forward-testing · Buying high-confluence setups (Score ≥ 70) · Auto-exiting on ATR SL & TP1/TP2
+          </div>
         </div>
       </div>
-
-      <!-- Stat Cards Grid -->
-      <div class="portfolio-stats-grid">
-        <div class="portfolio-stat-box">
-          <div class="exec-label">Total Portfolio Equity</div>
-          <div class="stat-big-val" id="portTotalEquity">$1,000.00</div>
-          <div class="stat-sub-val" id="portTotalReturn">+0.00% Overall</div>
-        </div>
-        <div class="portfolio-stat-box">
-          <div class="exec-label">Available Cash</div>
-          <div class="stat-big-val" id="portCash">$1,000.00</div>
-          <div class="stat-sub-val">Virtual Buying Power</div>
-        </div>
-        <div class="portfolio-stat-box">
-          <div class="exec-label">Realized Net P&L</div>
-          <div class="stat-big-val" id="portRealizedPnl">$0.00</div>
-          <div class="stat-sub-val" id="portClosedTrades">0 Closed Trades</div>
-        </div>
-        <div class="portfolio-stat-box">
-          <div class="exec-label">Unrealized Live P&L</div>
-          <div class="stat-big-val" id="portUnrealizedPnl">$0.00</div>
-          <div class="stat-sub-val" id="portOpenCount">0 Active Holdings</div>
-        </div>
-        <div class="portfolio-stat-box">
-          <div class="exec-label">Win Rate & Factor</div>
-          <div class="stat-big-val" id="portWinRate">0.0%</div>
-          <div class="stat-sub-val" id="portProfitFactor">Profit Factor: 1.00</div>
-        </div>
-      </div>
-
-      <!-- Subgrid: Active Positions & Closed History -->
-      <div style="display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 14px;">
-        <!-- Active Positions Table -->
-        <div>
-          <div class="card-title" style="margin-bottom: 8px;">
-            <span>🟢 Active Positions Under Forward Test</span>
-            <span id="portOpenPositionsMeta" style="font-family: var(--font-mono); font-size: 11px;">0 open positions</span>
-          </div>
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Shares</th>
-                  <th>Entry Price</th>
-                  <th>Live Price</th>
-                  <th>Invested</th>
-                  <th>Current Value</th>
-                  <th>Unrealized P&L</th>
-                  <th>Stop Loss</th>
-                  <th>TP1 Target</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="portOpenTableBody">
-                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 18px;">No active positions. Click "🤖 Auto-Invest $1,000 in Top AI Picks" or buy with virtual credits above.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Trade History Table -->
-        <div>
-          <div class="card-title" style="margin-bottom: 8px;">
-            <span>📜 Closed Trade History & Realized P&L</span>
-            <span id="portTradeHistoryMeta" style="font-family: var(--font-mono); font-size: 11px;">0 trades</span>
-          </div>
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Asset</th>
-                  <th>Entry ➔ Exit</th>
-                  <th>Invested</th>
-                  <th>Proceeds</th>
-                  <th>Realized P&L</th>
-                  <th>Result</th>
-                  <th>Exit Reason</th>
-                  <th>Exit Time</th>
-                </tr>
-              </thead>
-              <tbody id="portHistoryTableBody">
-                <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 18px;">No closed trades yet. Stop-Loss and Take-Profit automated triggers will log executions here.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="primary" onclick="triggerAutoTradeNow()" style="background: #10b981; border-color: #10b981; font-weight: 600;" title="Run AI forward scan immediately to execute buy/sell decisions">
+          ⚡ Run AI Scan Now
+        </button>
+        <button onclick="toggleAutoTradingMode()" id="aiToggleBtn" style="background: #1e293b; border-color: #475569; font-weight: 600;" title="Toggle AI Autonomous Execution on/off">
+          ⏸️ Pause Engine
+        </button>
+        <button class="primary" onclick="openAIReportModal()" style="background: #8b5cf6; border-color: #8b5cf6; font-weight: 600;" title="Generate institutional AI P&L and probability verification report">
+          📊 AI P&L Report
+        </button>
+        <button onclick="resetPortfolioCredits()" style="border-color: #475569;" title="Reset virtual credits back to $1,000.00">
+          ↺ Reset ($1,000)
+        </button>
       </div>
     </div>
+
+    <!-- Probability & Accuracy Verification Matrix -->
+    <div class="accuracy-matrix">
+      <div class="accuracy-card">
+        <div class="acc-title">🎯 AI Accuracy / Win Rate</div>
+        <div class="acc-val" id="accWinRate">0.0%</div>
+        <div class="acc-sub" id="accWinLossRatio">0 Wins / 0 Losses</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">📈 Profit Factor</div>
+        <div class="acc-val" id="accProfitFactor">1.00</div>
+        <div class="acc-sub" id="accGrossPnl">Gross Win: $0.00 | Loss: $0.00</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">💰 Total Portfolio Return</div>
+        <div class="acc-val" id="accTotalReturn">+0.00%</div>
+        <div class="acc-sub" id="accEquitySub">Equity: $1,000.00 / $1,000.00</div>
+      </div>
+      <div class="accuracy-card">
+        <div class="acc-title">🛡️ Risk-Reward Ratio (RR)</div>
+        <div class="acc-val" id="accAvgRR">2.3 : 1</div>
+        <div class="acc-sub">ATR Trailing Stop / TP Rules</div>
+      </div>
+    </div>
+
+    <!-- Stat Cards Grid -->
+    <div class="portfolio-stats-grid" style="margin-top: 16px;">
+      <div class="portfolio-stat-box">
+        <div class="exec-label">Total Portfolio Equity</div>
+        <div class="stat-big-val" id="portTotalEquity">$1,000.00</div>
+        <div class="stat-sub-val" id="portTotalReturn">+0.00% Overall</div>
+      </div>
+      <div class="portfolio-stat-box">
+        <div class="exec-label">Available Cash</div>
+        <div class="stat-big-val" id="portCash">$1,000.00</div>
+        <div class="stat-sub-val">Virtual Buying Power</div>
+      </div>
+      <div class="portfolio-stat-box">
+        <div class="exec-label">Realized Net P&L</div>
+        <div class="stat-big-val" id="portRealizedPnl">$0.00</div>
+        <div class="stat-sub-val" id="portClosedTrades">0 Closed Trades</div>
+      </div>
+      <div class="portfolio-stat-box">
+        <div class="exec-label">Unrealized Live P&L</div>
+        <div class="stat-big-val" id="portUnrealizedPnl">$0.00</div>
+        <div class="stat-sub-val" id="portOpenCount">0 Active Holdings</div>
+      </div>
+      <div class="portfolio-stat-box">
+        <div class="exec-label">Active Capital Deployed</div>
+        <div class="stat-big-val" id="portInvestedVal">$0.00</div>
+        <div class="stat-sub-val" id="portMaxPositions">Max 4 concurrent ($250/ea)</div>
+      </div>
+    </div>
+
+    <!-- Active Forward-Test Positions -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title" style="margin-bottom: 10px;">
+        <span>🟢 Open Positions Autonomously Managed by AI</span>
+        <span id="portOpenPositionsMeta" style="font-family: var(--font-mono); font-size: 11px;">0 open positions</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Shares</th>
+              <th>Entry Price</th>
+              <th>Live Price</th>
+              <th>Invested</th>
+              <th>Current Value</th>
+              <th>Unrealized P&L</th>
+              <th>Stop Loss</th>
+              <th>TP1 Target</th>
+              <th>AI Score & Bias</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="portOpenTableBody">
+            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active positions. The AI autonomous engine buys when a stock achieves ≥ 70 Confluence Score.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Dedicated AI Trade Records Table (Audit of Accuracy) -->
+    <div class="card" style="margin-top: 18px;">
+      <div class="card-title" style="margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <span style="font-size: 14px; font-weight: 700;">📜 AI Autonomous Trade Records & Accuracy Audit Log</span>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">All autonomous executions with entry/exit timestamps, P&L, probability score, and exit triggers.</div>
+        </div>
+        <span id="portTradeHistoryMeta" style="font-family: var(--font-mono); font-size: 11px;">0 recorded trades</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Action Flow</th>
+              <th>Score</th>
+              <th>Entry Price</th>
+              <th>Exit Price</th>
+              <th>Invested</th>
+              <th>Proceeds</th>
+              <th>Realized P&L</th>
+              <th>Outcome</th>
+              <th>Trigger / Reason</th>
+              <th>Exit Time</th>
+            </tr>
+          </thead>
+          <tbody id="portHistoryTableBody">
+            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No trade records yet. The autonomous engine records all executions here as positions close via Stop-Loss or Take-Profit.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
   </div>
 
   <!-- FLOATING AI CHATBOT BUTTON & DRAWER -->
@@ -1612,10 +1729,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    function switchView(tabKey) {
+      const tabUS = document.getElementById('tabUS');
+      const tabIN = document.getElementById('tabIN');
+      const tabAI = document.getElementById('tabAI');
+      const marketView = document.getElementById('marketView');
+      const aiTraderView = document.getElementById('aiTraderView');
+
+      if (tabKey === 'AI') {
+        if (tabUS) tabUS.className = 'market-tab';
+        if (tabIN) tabIN.className = 'market-tab';
+        if (tabAI) tabAI.className = 'market-tab active';
+        if (marketView) marketView.style.display = 'none';
+        if (aiTraderView) aiTraderView.style.display = 'block';
+        fetchPortfolio();
+      } else {
+        if (tabAI) tabAI.className = 'market-tab';
+        if (aiTraderView) aiTraderView.style.display = 'none';
+        if (marketView) marketView.style.display = 'block';
+        switchMarket(tabKey);
+      }
+    }
+
     function switchMarket(market) {
       currentMarket = market;
-      document.getElementById('tabUS').className = 'market-tab' + (market === 'US' ? ' active' : '');
-      document.getElementById('tabIN').className = 'market-tab' + (market === 'IN' ? ' active' : '');
+      const tabUS = document.getElementById('tabUS');
+      const tabIN = document.getElementById('tabIN');
+      const tabAI = document.getElementById('tabAI');
+      if (tabUS) tabUS.className = 'market-tab' + (market === 'US' ? ' active' : '');
+      if (tabIN) tabIN.className = 'market-tab' + (market === 'IN' ? ' active' : '');
+      if (tabAI) tabAI.className = 'market-tab';
+      
+      const marketView = document.getElementById('marketView');
+      const aiTraderView = document.getElementById('aiTraderView');
+      if (marketView) marketView.style.display = 'block';
+      if (aiTraderView) aiTraderView.style.display = 'none';
+
       document.getElementById('tickerInput').placeholder = market === 'US' 
         ? 'Search any US stock (e.g. NVDA, AAPL, TSLA, MSFT, SPY)' 
         : 'Search any Indian stock (e.g. RELIANCE, TCS, HDFCBANK, INFY)';
@@ -2121,62 +2270,94 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const unrealizedEl = document.getElementById('portUnrealizedPnl');
       const closedTradesEl = document.getElementById('portClosedTrades');
       const openCountEl = document.getElementById('portOpenCount');
-      const winRateEl = document.getElementById('portWinRate');
-      const factorEl = document.getElementById('portProfitFactor');
+      const investedEl = document.getElementById('portInvestedVal');
+      const maxPositionsEl = document.getElementById('portMaxPositions');
 
-      if (equityEl) equityEl.innerText = '$' + data.total_equity.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      // Accuracy Matrix elements
+      const accWinRate = document.getElementById('accWinRate');
+      const accWinLossRatio = document.getElementById('accWinLossRatio');
+      const accProfitFactor = document.getElementById('accProfitFactor');
+      const accGrossPnl = document.getElementById('accGrossPnl');
+      const accTotalReturn = document.getElementById('accTotalReturn');
+      const accEquitySub = document.getElementById('accEquitySub');
+
+      const sign = (data.total_pnl || 0) >= 0 ? '+' : '';
+
+      if (equityEl) equityEl.innerText = '$' + (data.total_equity || 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       if (returnEl) {
-        const sign = data.total_pnl >= 0 ? '+' : '';
-        returnEl.innerText = `${sign}$${data.total_pnl.toFixed(2)} (${sign}${data.total_pnl_pct.toFixed(2)}%) Overall`;
-        returnEl.style.color = data.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        returnEl.innerText = `${sign}$${(data.total_pnl || 0).toFixed(2)} (${sign}${(data.total_pnl_pct || 0).toFixed(2)}%) Overall`;
+        returnEl.style.color = (data.total_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
       }
-      if (cashEl) cashEl.innerText = '$' + data.cash.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (cashEl) cashEl.innerText = '$' + (data.cash || 1000).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       
       if (realizedEl) {
-        const sign = data.realized_pnl >= 0 ? '+' : '';
-        realizedEl.innerText = `${sign}$${data.realized_pnl.toFixed(2)}`;
-        realizedEl.style.color = data.realized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        const rSign = (data.realized_pnl || 0) >= 0 ? '+' : '';
+        realizedEl.innerText = `${rSign}$${(data.realized_pnl || 0).toFixed(2)}`;
+        realizedEl.style.color = (data.realized_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
       }
-      if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades} Closed Trades (${data.wins}W / ${data.losses}L)`;
+      if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades || 0} Closed Trades (${data.wins || 0}W / ${data.losses || 0}L)`;
 
       if (unrealizedEl) {
-        const sign = data.unrealized_pnl >= 0 ? '+' : '';
-        unrealizedEl.innerText = `${sign}$${data.unrealized_pnl.toFixed(2)}`;
-        unrealizedEl.style.color = data.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        const uSign = (data.unrealized_pnl || 0) >= 0 ? '+' : '';
+        unrealizedEl.innerText = `${uSign}$${(data.unrealized_pnl || 0).toFixed(2)}`;
+        unrealizedEl.style.color = (data.unrealized_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
       }
-      if (openCountEl) openCountEl.innerText = `${data.open_positions_count} Active Holdings`;
+      if (openCountEl) openCountEl.innerText = `${data.open_positions_count || 0} Active Holdings`;
+      if (investedEl) investedEl.innerText = '$' + (data.total_invested || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (maxPositionsEl) maxPositionsEl.innerText = `${data.open_positions_count || 0} of 4 slots deployed ($250/ea)`;
 
-      if (winRateEl) {
-        winRateEl.innerText = `${data.win_rate_pct.toFixed(1)}%`;
-        winRateEl.style.color = data.win_rate_pct >= 50 ? 'var(--green)' : (data.total_trades === 0 ? 'inherit' : 'var(--red)');
+      // Accuracy Matrix
+      if (accWinRate) {
+        accWinRate.innerText = `${(data.win_rate_pct || 0).toFixed(1)}%`;
+        accWinRate.style.color = (data.win_rate_pct || 0) >= 50 ? 'var(--green)' : (data.total_trades === 0 ? 'inherit' : 'var(--red)');
       }
-      if (factorEl) factorEl.innerText = `Profit Factor: ${data.profit_factor.toFixed(2)}`;
+      if (accWinLossRatio) {
+        accWinLossRatio.innerText = `${data.wins || 0} Wins / ${data.losses || 0} Losses (${data.total_trades || 0} Closed)`;
+      }
+      if (accProfitFactor) {
+        accProfitFactor.innerText = (data.profit_factor || 1.0).toFixed(2);
+      }
+      if (accGrossPnl) {
+        accGrossPnl.innerText = `Gross Win: $${(data.gross_profit || 0).toFixed(2)} | Loss: $${(data.gross_loss || 0).toFixed(2)}`;
+      }
+      if (accTotalReturn) {
+        accTotalReturn.innerText = `${sign}${(data.total_pnl_pct || 0).toFixed(2)}%`;
+        accTotalReturn.style.color = (data.total_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+      if (accEquitySub) {
+        accEquitySub.innerText = `Equity: $${(data.total_equity || 1000).toFixed(2)} / $1,000.00`;
+      }
 
-      // Render Open Positions Table
+      // Render Open Positions Table (11 columns)
       const openTbody = document.getElementById('portOpenTableBody');
       const openMeta = document.getElementById('portOpenPositionsMeta');
-      if (openMeta) openMeta.innerText = `${data.positions.length} active positions`;
+      if (openMeta) openMeta.innerText = `${data.positions ? data.positions.length : 0} active positions`;
 
       if (openTbody) {
         if (!data.positions || data.positions.length === 0) {
-          openTbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 18px;">No active positions. Click "🤖 Auto-Invest $1,000 in Top AI Picks" or buy with virtual credits above.</td></tr>';
+          openTbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active positions. The AI autonomous engine buys when a stock achieves ≥ 70 Confluence Score.</td></tr>';
         } else {
           openTbody.innerHTML = '';
           data.positions.forEach(p => {
             const tr = document.createElement('tr');
-            const sign = p.unrealized_pnl >= 0 ? '+' : '';
+            const pSign = p.unrealized_pnl >= 0 ? '+' : '';
             const colorClass = p.unrealized_pnl >= 0 ? 'color: var(--green);' : 'color: var(--red);';
             const currSymbol = p.currency === 'INR' ? '₹' : '$';
             tr.innerHTML = `
-              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')">${p.symbol}</strong></td>
+              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')" title="Click to open chart and 5-pillar breakdown">${p.symbol}</strong></td>
               <td style="font-family: var(--font-mono);">${p.shares}</td>
               <td style="font-family: var(--font-mono);">${currSymbol}${p.entry_price.toFixed(2)}</td>
               <td style="font-family: var(--font-mono);">${currSymbol}${p.current_price.toFixed(2)}</td>
               <td style="font-family: var(--font-mono);">$${p.invested.toFixed(2)}</td>
               <td style="font-family: var(--font-mono); font-weight: 600;">$${p.current_value.toFixed(2)}</td>
-              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${sign}$${p.unrealized_pnl.toFixed(2)} (${sign}${p.unrealized_pct.toFixed(2)}%)</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${pSign}$${p.unrealized_pnl.toFixed(2)} (${pSign}${p.unrealized_pct.toFixed(2)}%)</td>
               <td style="font-family: var(--font-mono); color: var(--red);">${p.stop_loss ? currSymbol + p.stop_loss.toFixed(2) : '-'}</td>
               <td style="font-family: var(--font-mono); color: var(--green);">${p.take_profit_1 ? currSymbol + p.take_profit_1.toFixed(2) : '-'}</td>
+              <td>
+                <span style="font-weight: 700; color: #60a5fa;">${p.score || 70}/100</span>
+                <span style="font-size: 10px; color: #10b981; font-weight: 600;">(${p.conviction || 'HIGH'})</span>
+                ${p.ai_rationale ? `<div style="font-size: 10px; color: #94a3b8; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.ai_rationale}">${p.ai_rationale}</div>` : ''}
+              </td>
               <td>
                 <button onclick="liquidatePosition('${p.symbol}', ${p.current_price})" style="padding: 3px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: var(--red); border-color: rgba(239,68,68,0.3);">
                   Liquidate
@@ -2188,38 +2369,134 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       }
 
-      // Render Closed Trades Table
+      // Render Dedicated AI Trade Records Audit Table (11 columns)
       const histTbody = document.getElementById('portHistoryTableBody');
       const histMeta = document.getElementById('portTradeHistoryMeta');
-      if (histMeta) histMeta.innerText = `${data.trade_history.length} trades recorded`;
+      if (histMeta) histMeta.innerText = `${data.trade_history ? data.trade_history.length : 0} recorded trades`;
 
       if (histTbody) {
         if (!data.trade_history || data.trade_history.length === 0) {
-          histTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 18px;">No closed trades yet. Automated Stop-Loss and Take-Profit rules will log executions here.</td></tr>';
+          histTbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No trade records yet. The autonomous engine records all executions here as positions close via Stop-Loss or Take-Profit.</td></tr>';
         } else {
           histTbody.innerHTML = '';
           data.trade_history.forEach(t => {
             const tr = document.createElement('tr');
-            const sign = t.pnl_amount >= 0 ? '+' : '';
+            const tSign = t.pnl_amount >= 0 ? '+' : '';
             const colorClass = t.pnl_amount >= 0 ? 'color: var(--green);' : 'color: var(--red);';
             const currSymbol = t.currency === 'INR' ? '₹' : '$';
             const resultBadge = t.result === 'WIN' 
-              ? '<span class="status-pill strong-buy">WIN</span>' 
-              : '<span class="status-pill sell">LOSS</span>';
+              ? '<span class="status-pill strong-buy" style="font-size: 11px; padding: 2px 7px;">🎯 WIN</span>' 
+              : '<span class="status-pill sell" style="font-size: 11px; padding: 2px 7px;">🛑 LOSS</span>';
             tr.innerHTML = `
-              <td><strong>${t.symbol}</strong></td>
-              <td style="font-family: var(--font-mono);">${currSymbol}${t.entry_price.toFixed(2)} ➔ ${currSymbol}${t.exit_price.toFixed(2)}</td>
+              <td><strong style="color: #fff;">${t.symbol}</strong></td>
+              <td><span class="action-chip buy">BUY</span> ➔ <span class="action-chip sell">SELL</span></td>
+              <td style="font-family: var(--font-mono);"><span style="color: #60a5fa; font-weight: 700;">${t.score || '-'}</span><small style="color: #64748b;">/100</small></td>
+              <td style="font-family: var(--font-mono);">${currSymbol}${t.entry_price.toFixed(2)}</td>
+              <td style="font-family: var(--font-mono);">${currSymbol}${t.exit_price.toFixed(2)}</td>
               <td style="font-family: var(--font-mono);">$${t.invested.toFixed(2)}</td>
               <td style="font-family: var(--font-mono);">$${t.proceeds.toFixed(2)}</td>
-              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${sign}$${t.pnl_amount.toFixed(2)} (${sign}${t.pnl_pct.toFixed(2)}%)</td>
+              <td style="font-family: var(--font-mono); font-weight: 700; ${colorClass}">${tSign}$${t.pnl_amount.toFixed(2)} (${tSign}${t.pnl_pct.toFixed(2)}%)</td>
               <td>${resultBadge}</td>
-              <td style="font-size: 11px; font-family: var(--font-mono); color: #94a3b8;">${t.exit_reason}</td>
-              <td style="font-size: 11px; color: var(--text-muted);">${t.exit_time || '-'}</td>
+              <td style="font-size: 11px; color: #cbd5e1;">
+                <strong>${t.exit_reason || 'TRIGGER'}</strong>
+                ${t.exit_rationale ? `<div style="font-size: 10px; color: #94a3b8; max-width: 220px; line-height: 1.3; margin-top: 2px;">${t.exit_rationale}</div>` : ''}
+              </td>
+              <td style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">${t.exit_time || '-'}</td>
             `;
             histTbody.appendChild(tr);
           });
         }
       }
+    }
+
+    let autoTradeRunning = false;
+    async function triggerAutoTradeNow() {
+      if (autoTradeRunning) return;
+      autoTradeRunning = true;
+      showToast('🤖 AI scanning live market to execute autonomous buy/sell decisions...');
+      try {
+        const res = await fetch('/api/portfolio/auto-trade-now', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({market: currentMarket})
+        });
+        const data = await res.json();
+        if (data.success) {
+          const buys = data.bought ? data.bought.length : 0;
+          const sells = data.sold ? data.sold.length : 0;
+          if (buys > 0 || sells > 0) {
+            showToast(`✓ AI executed ${buys} buys and ${sells} sells!`);
+          } else {
+            showToast(`✓ AI scan completed: Evaluated ${data.analyzed_count || 0} setups. No criteria breached.`);
+          }
+          if (data.portfolio) {
+            updatePortfolioUI(data.portfolio);
+          } else {
+            fetchPortfolio();
+          }
+        } else {
+          showToast(`AI execution error: ${data.error || 'Failed'}`);
+        }
+      } catch (e) {
+        showToast('Error during auto-trade: ' + e);
+      } finally {
+        autoTradeRunning = false;
+      }
+    }
+
+    let isAutoTradeEngineActive = true;
+    async function toggleAutoTradingMode() {
+      isAutoTradeEngineActive = !isAutoTradeEngineActive;
+      const toggleBtn = document.getElementById('aiToggleBtn');
+      const badge = document.getElementById('aiAutoBadge');
+      const tabPill = document.getElementById('aiTabLivePill');
+      const dot = document.getElementById('aiEngineDot');
+
+      if (isAutoTradeEngineActive) {
+        if (toggleBtn) toggleBtn.innerText = '⏸️ Pause Engine';
+        if (badge) {
+          badge.innerText = 'AUTONOMOUS: ACTIVE';
+          badge.style.background = 'rgba(16, 185, 129, 0.2)';
+          badge.style.color = '#10b981';
+          badge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        }
+        if (tabPill) {
+          tabPill.innerText = 'AUTO: ON';
+          tabPill.style.background = 'rgba(16,185,129,0.2)';
+          tabPill.style.color = '#10b981';
+        }
+        if (dot) dot.style.background = '#10b981';
+      } else {
+        if (toggleBtn) toggleBtn.innerText = '▶️ Resume Engine';
+        if (badge) {
+          badge.innerText = 'AUTONOMOUS: PAUSED';
+          badge.style.background = 'rgba(239, 68, 68, 0.2)';
+          badge.style.color = '#ef4444';
+          badge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        }
+        if (tabPill) {
+          tabPill.innerText = 'AUTO: OFF';
+          tabPill.style.background = 'rgba(239,68,68,0.2)';
+          tabPill.style.color = '#ef4444';
+        }
+        if (dot) dot.style.background = '#ef4444';
+      }
+
+      try {
+        await fetch('/api/portfolio/toggle-auto-trade', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: isAutoTradeEngineActive})
+        });
+        showToast('Autonomous AI Engine ' + (isAutoTradeEngineActive ? 'Resumed (Scanning every 3m)' : 'Paused'));
+      } catch (e) {
+        showToast('Error syncing engine state: ' + e);
+      }
+    }
+
+    function loadSingleStock(sym) {
+      switchView(sym.includes('.NS') || sym.includes('.BO') ? 'IN' : 'US');
+      analyzeSpecific(sym);
     }
 
     async function autoInvestTopPicks() {
@@ -2497,7 +2774,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             res = portfolio.sell(sym, price, exit_reason=reason)
             self.send_json(res)
 
-        elif path == "/api/portfolio/auto-invest":
+        elif path == "/api/portfolio/auto-invest" or path == "/api/portfolio/auto-trade-now":
             market = payload.get("market", "US").upper()
             stocks = list(cached_results.values())
             if len(stocks) < 3:
@@ -2511,9 +2788,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             stocks.append(res)
                     except Exception:
                         pass
-            executed = portfolio.auto_invest_top_picks(stocks, max_positions=4)
+            trade_res = portfolio.process_autonomous_signals(stocks, max_positions=4)
             live_prices = {s: r.get("current_price", 0.0) for s, r in cached_results.items() if r.get("current_price")}
-            self.send_json({"executed": executed, "summary": portfolio.get_summary(live_prices)})
+            trade_res["summary"] = portfolio.get_summary(live_prices)
+            self.send_json(trade_res)
+
+        elif path == "/api/portfolio/toggle-auto-trade":
+            global ai_auto_trading_enabled
+            enabled = payload.get("enabled")
+            if enabled is None:
+                ai_auto_trading_enabled = not ai_auto_trading_enabled
+            else:
+                ai_auto_trading_enabled = bool(enabled)
+            config["ai_auto_trading_enabled"] = ai_auto_trading_enabled
+            save_config(config)
+            self.send_json({"ai_auto_trading_enabled": ai_auto_trading_enabled})
 
         elif path == "/api/portfolio/reset":
             summary = portfolio.reset()
