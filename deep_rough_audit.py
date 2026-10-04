@@ -105,6 +105,9 @@ if status == 200 and isinstance(html, str):
         ("AI Market Chatbot Tab", 'id="tabAI"'),
         ("24/7 Signals Feed Container", 'id="signalsFeedBody"'),
         ("Signals Count Badge", 'id="signalsFeedCount"'),
+        ("Practice Chart Timing Radar", 'id="pracTimingRadar"'),
+        ("Trade Dock Timing Notice", 'id="dockTimingNotice"'),
+        ("Timing Countdown Badge", 'id="timingCountdownBadge"'),
     ]
     for label, needle in ui_elements:
         if needle in html:
@@ -187,7 +190,18 @@ if s_sig1 == 200 and s_sig2 == 200:
 else:
     record_fail("Signals Route Aliases", f"s_sig1={s_sig1}, s_sig2={s_sig2}")
 
-# E. High Concurrency Burst (6 Simultaneous Parallel Workers)
+# E. Chart Timing & Confluence Radar API (IST Time Verified)
+s_time, time_data = http_get("/api/chart-timing?symbol=NVDA&timeframe=1m")
+if (s_time == 200 and isinstance(time_data, dict) and "timing" in time_data 
+    and time_data["timing"].get("trigger_timestamp")
+    and "IST" in str(time_data["timing"].get("trigger_time_ist", ""))
+    and "IST" in str(time_data["timing"].get("optimal_window", ""))):
+    t_obj = time_data["timing"]
+    record_pass("Chart Timing Engine API (IST)", f"Action={t_obj.get('action')}, Trigger={t_obj.get('trigger_time_ist')}, NextBar={t_obj.get('next_candle_time_ist')}")
+else:
+    record_fail("Chart Timing Engine API (IST)", f"s={s_time}, data={time_data}")
+
+# F. High Concurrency Burst (6 Simultaneous Parallel Workers)
 print("  Burst testing: 6 simultaneous parallel worker requests...")
 burst_symbols = ["NVDA", "AAPL", "MSFT", "RELIANCE.NS", "XAU/USD", "BTC/USD"]
 with ThreadPoolExecutor(max_workers=6) as executor:

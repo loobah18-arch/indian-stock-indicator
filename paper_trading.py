@@ -2,8 +2,10 @@
 import os
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
 PRACTICE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "practice_portfolio.json")
@@ -64,7 +66,7 @@ class PaperPortfolio:
             "starting_balance": self.starting_balance,
             "cash": round(self.cash, 2),
             "created_at": self.created_at,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
             "positions": self.positions,
             "trade_history": self.trade_history,
         }
@@ -112,7 +114,7 @@ class PaperPortfolio:
         actual_invested = round(shares * price_usd, 2)
 
         self.cash = round(self.cash - actual_invested, 2)
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
         position_data = {
             "symbol": symbol,
@@ -197,7 +199,7 @@ class PaperPortfolio:
         pnl_pct = round(((price - pos["entry_price"]) / pos["entry_price"]) * 100, 2) if pos.get("entry_price") else 0.0
 
         self.cash = round(self.cash + gross_proceeds, 2)
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
         trade_record = {
             "id": f"trade_{symbol}_{int(time.time())}",

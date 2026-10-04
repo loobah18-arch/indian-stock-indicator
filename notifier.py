@@ -2,8 +2,10 @@ import os
 import json
 import subprocess
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 ALERT_HISTORY: List[Dict[str, Any]] = []
 
@@ -178,7 +180,7 @@ class Notifier:
 
         alert_entry = {
             "id": f"{sym}_{int(datetime.now().timestamp())}",
-            "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+            "timestamp": datetime.now(IST).strftime("%H:%M:%S IST"),
             "symbol": sym,
             "type": "BUY" if "BUY" in signal else ("SELL" if "SELL" in signal else "HOLD"),
             "signal": signal,
@@ -221,7 +223,7 @@ class Notifier:
 
         alert_entry = {
             "id": f"trade_{sym}_{int(datetime.now().timestamp())}",
-            "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+            "timestamp": datetime.now(IST).strftime("%H:%M:%S IST"),
             "symbol": sym,
             "type": alert_type,
             "signal": result.get("signal", alert_type),

@@ -3,11 +3,14 @@ import os
 import sys
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import threading
 import urllib.parse
+
+IST = timezone(timedelta(hours=5, minutes=30))
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 from typing import Dict, Any, Optional, List
 
 from market_client import MarketClient
@@ -92,6 +95,9 @@ load_signals_feed()
 cached_results: Dict[str, Any] = {}
 auto_monitor_enabled = config.get("auto_monitor_enabled", True)
 ai_auto_trading_enabled = config.get("ai_auto_trading_enabled", True)
+ai_trade_symbols = config.get("ai_trade_symbols", [
+    "NVDA", "AAPL", "MSFT", "TSLA", "RELIANCE.NS", "TCS.NS", "ICICIBANK.NS", "BTC/USD", "XAU/USD"
+])
 alerted_triggers = set()
 
 def background_market_monitor_loop():
@@ -100,7 +106,7 @@ def background_market_monitor_loop():
         try:
             if auto_monitor_enabled:
                 notifier = Notifier(discord_webhook_url=config.get("discord_webhook_url"))
-                all_syms = config.get("watchlist_us", []) + config.get("watchlist_india", [])
+                all_syms = list(dict.fromkeys(config.get("watchlist_us", []) + config.get("watchlist_india", []) + ai_trade_symbols + ["XAU/USD", "BTC/USD", "ETH/USD"]))
 
                 with ThreadPoolExecutor(max_workers=8) as executor:
                     future_to_sym = {executor.submit(client.get_full_analysis, client.resolve_symbol(s)): s for s in all_syms}
@@ -114,7 +120,7 @@ def background_market_monitor_loop():
                                 buy_t = triggers.get("buy", {})
                                 sell_t = triggers.get("sell", {})
 
-                                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                                now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
                                 if buy_t.get("triggered"):
                                     key = (res["symbol"], "BUY")
                                     sig_item = {
@@ -181,8 +187,15 @@ def background_market_monitor_loop():
                 # Autonomous AI Trading: deploy virtual credits into top confluence setups & execute TP/SL exits
                 if ai_auto_trading_enabled and cached_results:
                     try:
-                        trade_res = portfolio.process_autonomous_signals(list(cached_results.values()), max_positions=4)
-                        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                        if ai_trade_symbols and "ALL" not in ai_trade_symbols:
+                            eligible_stocks = [
+                                r for sym, r in cached_results.items()
+                                if sym in ai_trade_symbols or sym.replace('/', '') in ai_trade_symbols or any(s == sym for s in ai_trade_symbols)
+                            ]
+                        else:
+                            eligible_stocks = list(cached_results.values())
+                        trade_res = portfolio.process_autonomous_signals(eligible_stocks, max_positions=4)
+                        now_ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
                         for b in trade_res.get("buys_executed", []):
                             print(f"[{now_ts}] [AI AUTONOMOUS TRADER] BUY: {b['symbol']} | ${b['invested']} invested ({b['shares']} shares @ ${b['price']}) | Score: {b.get('score')}/100 | Cash Left: ${b.get('remaining_cash')}")
                         for s in trade_res.get("sells_executed", []):
@@ -712,6 +725,69 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       color: var(--text-muted);
     }
 
+    /* AI Trading Universe Chips */
+    .universe-chip {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .universe-chip:hover {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.1);
+    }
+    .universe-chip.selected {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: #10b981;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+    }
+    .universe-chip .chip-symbol {
+      font-weight: 800;
+      font-size: 12px;
+      color: #fff;
+      font-family: var(--font-mono);
+    }
+    .universe-chip.selected .chip-symbol {
+      color: #10b981;
+    }
+    .universe-chip .chip-check {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .universe-chip.selected .chip-check {
+      color: #10b981;
+      font-weight: 800;
+    }
+
+    /* Chat Action Card */
+    .chat-action-card {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid #10b981;
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: #e2e8f0;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15);
+    }
+    .chat-action-card .action-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 800;
+      color: #10b981;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+
     /* Search Box & Quick Pills */
     .search-section {
       margin-bottom: 16px;
@@ -1236,6 +1312,526 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       z-index: 1001;
       box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     }
+
+    /* ============================================== */
+    /* BINOMO STYLE PRACTICE TRADING DESK STYLES       */
+    /* ============================================== */
+    .binomo-top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+    }
+    .binomo-assets-scroll {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      max-width: 100%;
+      padding-bottom: 2px;
+    }
+    .binomo-asset-chip {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .binomo-asset-chip:hover, .binomo-asset-chip.active {
+      border-color: #60a5fa;
+      background: rgba(59,130,246,0.18);
+      color: #fff;
+    }
+    .binomo-asset-chip .chip-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .binomo-asset-chip .chip-rate {
+      font-size: 10px;
+      color: #10b981;
+      font-family: var(--font-mono);
+      font-weight: 700;
+    }
+    .binomo-account-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(15,23,42,0.85);
+      border: 1px solid rgba(245,158,11,0.3);
+      padding: 6px 12px;
+      border-radius: 6px;
+    }
+    .binomo-demo-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 800;
+      color: #f59e0b;
+      letter-spacing: 0.05em;
+    }
+    .binomo-balance-group {
+      text-align: right;
+    }
+    .binomo-cash-val {
+      font-family: var(--font-mono);
+      font-weight: 800;
+      font-size: 17px;
+      color: #fff;
+      line-height: 1.1;
+    }
+    .binomo-equity-sub {
+      font-size: 10px;
+      color: #94a3b8;
+    }
+    .binomo-recharge-btn {
+      background: rgba(245,158,11,0.15);
+      border: 1px solid rgba(245,158,11,0.4);
+      color: #fbbf24;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 9px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .binomo-recharge-btn:hover {
+      background: rgba(245,158,11,0.25);
+    }
+    .binomo-stats-ribbon {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+    }
+    .binomo-stat-item {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      padding-right: 8px;
+    }
+    .binomo-stat-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .binomo-stat-val {
+      font-size: 16px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      color: #fff;
+    }
+    .binomo-stat-sub {
+      font-size: 10px;
+      color: #64748b;
+    }
+    .binomo-terminal-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 14px;
+    }
+    @media (max-width: 960px) {
+      .binomo-terminal-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .binomo-chart-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+    }
+    .binomo-chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .binomo-tf-bar {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      background: rgba(15,23,42,0.7);
+      padding: 3px 6px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .binomo-chart-wrapper {
+      width: 100%;
+      height: 480px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #131722;
+    }
+    @media (max-width: 768px) {
+      .binomo-chart-wrapper { height: 360px; }
+    }
+    iframe#practice_tv_iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
+    .binomo-trade-dock {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .binomo-dock-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding-bottom: 10px;
+    }
+    .binomo-live-price {
+      font-size: 20px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      color: #fff;
+    }
+    .binomo-time-presets {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+    .binomo-time-btn {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 2px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .binomo-time-btn:hover, .binomo-time-btn.active {
+      border-color: #3b82f6;
+      background: rgba(59,130,246,0.2);
+      color: #60a5fa;
+    }
+    .binomo-amount-stepper {
+      display: flex;
+      align-items: center;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .stepper-btn {
+      width: 42px;
+      height: 40px;
+      background: rgba(255,255,255,0.04);
+      border: none;
+      color: #cbd5e1;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .stepper-btn:hover {
+      background: rgba(255,255,255,0.09);
+      color: #fff;
+    }
+    .binomo-amount-chips {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .binomo-amount-chips button {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .binomo-amount-chips button:hover {
+      border-color: #60a5fa;
+      color: #fff;
+    }
+    .binomo-payout-card {
+      background: linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(15,23,42,0.4) 100%);
+      border: 1px solid rgba(16,185,129,0.25);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .binomo-btn-up {
+      width: 100%;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.15s;
+      box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    }
+    .binomo-btn-up:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(16,185,129,0.45);
+    }
+    .binomo-btn-down {
+      width: 100%;
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.15s;
+      box-shadow: 0 4px 12px rgba(239,68,68,0.3);
+    }
+    .binomo-btn-down:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(239,68,68,0.45);
+    }
+    .binomo-drawer {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .binomo-drawer-tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+    }
+    .drawer-tab {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .drawer-tab:hover, .drawer-tab.active {
+      background: var(--surface-elevated);
+      border-color: var(--border);
+      color: #fff;
+    }
+    .pulse-indicator-yellow {
+      width: 8px;
+      height: 8px;
+      background: #f59e0b;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 8px #f59e0b;
+      animation: pulse 1.8s infinite;
+    }
+    .pulse-indicator-green {
+      width: 7px;
+      height: 7px;
+      background: #10b981;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 0 6px #10b981;
+      animation: pulse 1.5s infinite;
+    }
+    /* Binomo Chart Timing & Confluence Radar */
+    .binomo-timing-banner {
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.9));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .timing-col-left {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+      min-width: 250px;
+    }
+    .timing-col-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .timing-action-badge {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      padding: 4px 10px;
+      border-radius: 5px;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+      border: 1px solid #10b981;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+    }
+    .timing-action-badge.sell {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+      border: 1px solid #ef4444;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+    }
+    .timing-action-badge.wait {
+      background: rgba(96, 165, 250, 0.2);
+      color: #60a5fa;
+      border: 1px solid #60a5fa;
+      box-shadow: 0 0 10px rgba(96, 165, 250, 0.2);
+    }
+    .timing-score-pill {
+      font-size: 11px;
+      font-weight: 700;
+      color: #cbd5e1;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-family: var(--font-mono);
+    }
+    .timing-type-pill {
+      font-size: 10px;
+      color: #94a3b8;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 3px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .timing-reason-text {
+      font-size: 12px;
+      color: #e2e8f0;
+      font-weight: 500;
+      line-height: 1.4;
+    }
+    .timing-time-box {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 5px 8px;
+      display: flex;
+      flex-direction: column;
+      min-width: 90px;
+    }
+    .timing-time-box.highlight {
+      border-color: rgba(96, 165, 250, 0.4);
+      background: rgba(15, 23, 42, 0.7);
+    }
+    .timing-box-label {
+      font-size: 9px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .timing-box-val {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: #fff;
+    }
+    .timing-countdown-badge {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 800;
+      color: #60a5fa;
+      background: rgba(96, 165, 250, 0.2);
+      padding: 2px 5px;
+      border-radius: 3px;
+      border: 1px solid rgba(96, 165, 250, 0.4);
+      letter-spacing: 0.02em;
+    }
+    .timing-apply-btn {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      border: none;
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+    .timing-apply-btn:hover {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      transform: translateY(-1px);
+    }
+    .timing-refresh-btn {
+      background: var(--surface-elevated);
+      color: #94a3b8;
+      border: 1px solid var(--border);
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+    .timing-refresh-btn:hover {
+      color: #fff;
+      border-color: #60a5fa;
+    }
+    .pulse-highlight {
+      animation: pulseHighlight 0.6s 3 alternate ease-in-out;
+    }
+    @keyframes pulseHighlight {
+      0% { transform: scale(1); filter: drop-shadow(0 0 0px #fff); }
+      100% { transform: scale(1.03); filter: drop-shadow(0 0 12px #fff); }
+    }
   </style>
 </head>
 <body>
@@ -1574,7 +2170,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <table>
           <thead>
             <tr>
-              <th>Timestamp (UTC)</th>
+              <th>Timestamp (IST)</th>
               <th>Asset</th>
               <th>Action</th>
               <th>Signal Type</th>
@@ -1635,6 +2231,49 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="macro-btn" onclick="switchView('Practice')" style="padding: 4px 10px; font-size: 11px; background: rgba(99,102,241,0.25); color: #c7d2fe; border-color: rgba(99,102,241,0.5);">
         Open Practice Sandbox ➔
       </button>
+    </div>
+
+    <!-- 🎯 AI TRADING UNIVERSE & ASSET SELECTOR -->
+    <div class="card" style="margin-top: 14px; border: 1px solid rgba(59,130,246,0.4); background: linear-gradient(180deg, rgba(30,41,59,0.5) 0%, rgba(15,23,42,0.7) 100%);">
+      <div class="card-title" style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">🎯</span>
+          <span style="font-size: 14px; font-weight: 800; color: #fff;">AI Auto-Trader Universe & Stock Selector</span>
+          <span id="aiUniverseCountBadge" class="ai-model-badge" style="background: rgba(16,185,129,0.2); color: #10b981; border-color: rgba(16,185,129,0.4);">
+            Loading Universe...
+          </span>
+        </div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <button type="button" class="macro-btn" onclick="selectUniversePreset('ALL')">⚡ All Assets</button>
+          <button type="button" class="macro-btn" onclick="selectUniversePreset('US')">🇺🇸 US Mega-Caps</button>
+          <button type="button" class="macro-btn" onclick="selectUniversePreset('IN')">🇮🇳 Nifty India</button>
+          <button type="button" class="macro-btn" onclick="selectUniversePreset('CRYPTO_COMMODITY')">🪙 Crypto & Gold</button>
+          <button type="button" class="macro-btn" onclick="selectUniversePreset('NONE')" style="color: #ef4444;">❌ Clear All</button>
+        </div>
+      </div>
+
+      <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+        Choose which stocks the autonomous AI engine is permitted to trade with its $1,000 capital. Click any chip to toggle on/off, or command the chatbot directly: <em>"Set AI to trade only NVDA and BTC"</em>.
+      </div>
+
+      <!-- Scrollable Asset Selector Chips Grid -->
+      <div id="aiUniverseChipsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; max-height: 220px; overflow-y: auto; padding: 4px;">
+        <div style="color: var(--text-muted); font-size: 12px; padding: 10px; text-align: center; grid-column: 1 / -1;">
+          Loading trading universe assets...
+        </div>
+      </div>
+
+      <!-- Custom Asset Input & Action Bar -->
+      <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Add Custom Ticker:</span>
+          <input type="text" id="aiUniverseCustomInput" placeholder="e.g. PLTR, INFY.NS, SOL/USD" style="width: 170px; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 6px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px; font-weight: 700;">
+          <button type="button" class="primary" onclick="addCustomToAIUniverse()" style="padding: 6px 12px; font-size: 11px; font-weight: 700;">+ Add Ticker</button>
+        </div>
+        <button type="button" onclick="saveAIUniverseSelection()" style="padding: 6px 16px; background: #10b981; border: 1px solid #10b981; color: #fff; border-radius: 6px; font-size: 12px; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+          <span>💾</span> Save Active Universe
+        </button>
+      </div>
     </div>
 
     <!-- Probability & Accuracy Verification Matrix -->
@@ -1758,199 +2397,402 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- VIEW 3: PRACTICE SANDBOX & TEST AI GUIDANCE ($1,000)    -->
   <!-- ======================================================= -->
   <div id="practiceView" style="display: none; margin-top: 15px;">
-    <!-- Practice Sandbox Banner -->
-    <div class="ai-live-banner" style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%); border-left: 4px solid #6366f1;">
-      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-        <span style="font-size: 26px;">🎮</span>
-        <div>
-          <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
-            <span>Interactive Practice Sandbox ($1,000 Virtual Credits)</span>
-            <span class="ai-model-badge" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border-color: rgba(99, 102, 241, 0.4);">MANUAL TEST LAB</span>
-          </div>
-          <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
-            Test the AI's trading recommendations yourself! Buy and sell according to live AI guidance or test your own timing with zero financial risk.
-          </div>
-        </div>
-      </div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <button class="primary" onclick="fetchAIGuidance()" style="background: #6366f1; border-color: #6366f1; font-weight: 600;">
-          💡 Refresh AI Guidance
+    
+    <!-- Binomo Top Navigation & Asset Selector Bar -->
+    <div class="binomo-top-bar">
+      <!-- Left: Asset Switcher -->
+      <div class="binomo-assets-scroll">
+        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-right: 4px;">Assets:</span>
+        <button type="button" class="binomo-asset-chip active" data-sym="NVDA" onclick="selectPracticeAsset('NVDA')">
+          <span class="chip-dot" style="background: #10b981;"></span>
+          <strong>NVDA</strong> <span class="chip-rate">+43%</span>
         </button>
-        <button onclick="resetPracticeCredits()" style="border-color: #475569;" title="Reset practice virtual credits back to $1,000.00">
-          ↺ Reset Practice ($1,000)
+        <button type="button" class="binomo-asset-chip" data-sym="XAU/USD" onclick="selectPracticeAsset('XAU/USD')">
+          <span class="chip-dot" style="background: #f59e0b;"></span>
+          <strong>GOLD (XAU/USD)</strong> <span class="chip-rate">+15%</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="BTC/USD" onclick="selectPracticeAsset('BTC/USD')">
+          <span class="chip-dot" style="background: #f59e0b;"></span>
+          <strong>BTC/USD</strong> <span class="chip-rate">+25%</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="ETH/USD" onclick="selectPracticeAsset('ETH/USD')">
+          <span class="chip-dot" style="background: #60a5fa;"></span>
+          <strong>ETH/USD</strong> <span class="chip-rate">+20%</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="RELIANCE.NS" onclick="selectPracticeAsset('RELIANCE.NS')">
+          <span class="chip-dot" style="background: #f59e0b;"></span>
+          <strong>RELIANCE.NS</strong> <span class="chip-rate">₹ INR</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="ICICIBANK.NS" onclick="selectPracticeAsset('ICICIBANK.NS')">
+          <span class="chip-dot" style="background: #10b981;"></span>
+          <strong>ICICIBANK.NS</strong> <span class="chip-rate">₹ INR</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="AAPL" onclick="selectPracticeAsset('AAPL')">
+          <span class="chip-dot" style="background: #94a3b8;"></span>
+          <strong>AAPL</strong> <span class="chip-rate">+18%</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="TSLA" onclick="selectPracticeAsset('TSLA')">
+          <span class="chip-dot" style="background: #ef4444;"></span>
+          <strong>TSLA</strong> <span class="chip-rate">+35%</span>
+        </button>
+        <button type="button" class="binomo-asset-chip" data-sym="EUR/USD" onclick="selectPracticeAsset('EUR/USD')">
+          <span class="chip-dot" style="background: #60a5fa;"></span>
+          <strong>EUR/USD</strong> <span class="chip-rate">Forex</span>
+        </button>
+      </div>
+
+      <!-- Right: Binomo Account Pill -->
+      <div class="binomo-account-card">
+        <div class="binomo-demo-badge">
+          <span class="pulse-indicator-yellow"></span>
+          <span>DEMO ACCOUNT</span>
+        </div>
+        <div class="binomo-balance-group">
+          <div class="binomo-cash-val" id="pracCash">$1,000.00</div>
+          <div class="binomo-equity-sub" id="pracEquitySub">Equity: $1,000.00</div>
+        </div>
+        <button onclick="resetPracticeCredits()" class="binomo-recharge-btn" title="Reset practice virtual credits back to $1,000.00">
+          ↺ Refill ($1,000)
         </button>
       </div>
     </div>
 
-    <!-- Practice Performance Matrix -->
-    <div class="accuracy-matrix">
-      <div class="accuracy-card">
-        <div class="acc-title">🎯 Practice Win Rate</div>
-        <div class="acc-val" id="pracWinRate" style="color: #818cf8;">0.0%</div>
-        <div class="acc-sub" id="pracWinLossRatio">0 Wins / 0 Losses</div>
+    <!-- Binomo Quick Stats Ribbon -->
+    <div class="binomo-stats-ribbon">
+      <div class="binomo-stat-item">
+        <span class="binomo-stat-label">🎯 Win Rate</span>
+        <span class="binomo-stat-val" id="pracWinRate" style="color: #10b981;">0.0%</span>
+        <span class="binomo-stat-sub" id="pracWinLossRatio">0 Wins / 0 Losses</span>
       </div>
-      <div class="accuracy-card">
-        <div class="acc-title">💰 Practice Total Return</div>
-        <div class="acc-val" id="pracTotalReturn">+0.00%</div>
-        <div class="acc-sub" id="pracEquitySub">Equity: $1,000.00 / $1,000.00</div>
+      <div class="binomo-stat-item">
+        <span class="binomo-stat-label">💰 Total Return</span>
+        <span class="binomo-stat-val" id="pracTotalReturn">+0.00%</span>
+        <span class="binomo-stat-sub">Virtual P&L</span>
       </div>
-      <div class="accuracy-card">
-        <div class="acc-title">💵 Available Practice Cash</div>
-        <div class="acc-val" id="pracCash">$1,000.00</div>
-        <div class="acc-sub">Virtual Buying Power</div>
+      <div class="binomo-stat-item">
+        <span class="binomo-stat-label">📈 Realized Net P&L</span>
+        <span class="binomo-stat-val" id="pracRealizedPnl">$0.00</span>
+        <span class="binomo-stat-sub" id="pracClosedTrades">0 Closed Trades</span>
       </div>
-      <div class="accuracy-card">
-        <div class="acc-title">📈 Realized Net P&L</div>
-        <div class="acc-val" id="pracRealizedPnl">$0.00</div>
-        <div class="acc-sub" id="pracClosedTrades">0 Closed Trades</div>
-      </div>
-    </div>
-
-    <!-- Live AI Guidance Cards (Top Recommended Setups) -->
-    <div class="card" style="margin-top: 18px;">
-      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span>💡 Live AI Guidance: Top Opportunities Ready for Test</span>
-          <span class="ai-model-badge" style="background: rgba(16,185,129,0.2); color: #10b981; border-color: rgba(16,185,129,0.4);">HIGH CONFLUENCE</span>
-        </div>
-        <span style="font-size: 11px; color: var(--text-muted);">Click "Follow AI: Buy" to test in your Practice Sandbox</span>
-      </div>
-      <div id="aiGuidanceGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 10px;">
-        <div style="color: var(--text-muted); font-size: 12px; padding: 15px; text-align: center; grid-column: 1 / -1;">
-          Loading AI recommendations...
-        </div>
+      <div class="binomo-stat-item" style="border: none;">
+        <span class="binomo-stat-label">⚡ AI Mode</span>
+        <span class="binomo-stat-val" style="color: #60a5fa;">QUANT RADAR</span>
+        <span class="binomo-stat-sub">5-Pillar Confluence</span>
       </div>
     </div>
 
-    <!-- Practice Manual Order Console -->
-    <div class="card" style="margin-top: 18px;">
-      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span>⚡ Practice Trade Execution Console</span>
-          <span style="font-size: 11px; color: var(--text-muted);">Execute manual trades with virtual credits</span>
-        </div>
-        <div style="font-size: 12px; font-family: var(--font-mono);">
-          Available Cash: <span id="pracConsoleCash" style="color: #10b981; font-weight: 700;">$1,000.00</span>
-        </div>
-      </div>
+    <!-- Binomo Main Trading Arena (Chart Left + Dock Right) -->
+    <div class="binomo-terminal-grid">
       
-      <!-- Quick Ticker Suggestions (Buy & Active Holdings for Sell) -->
-      <div style="margin-top: 8px; margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px;">
-        <span style="color: var(--text-muted); font-weight: 600;">Quick Pick:</span>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('NVDA')" style="padding: 2px 7px; font-size: 11px;">NVDA</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('AAPL')" style="padding: 2px 7px; font-size: 11px;">AAPL</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('TSLA')" style="padding: 2px 7px; font-size: 11px;">TSLA</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('MSFT')" style="padding: 2px 7px; font-size: 11px;">MSFT</button>
-        <span style="color: var(--border); margin: 0 2px;">|</span>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('RELIANCE.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">RELIANCE.NS</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('ICICIBANK.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">ICICIBANK.NS</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('TCS.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">TCS.NS</button>
-        <button type="button" class="macro-btn" onclick="quickFillPracticeTicker('INFY.NS')" style="padding: 2px 7px; font-size: 11px; color: #f59e0b;">INFY.NS</button>
-        <span id="pracHoldingsChips" style="display: inline-flex; align-items: center; gap: 4px;"></span>
-      </div>
-
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: flex-end;">
-        <div>
-          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticker Symbol</label>
-          <input type="text" id="pracInputSymbol" placeholder="e.g. NVDA, RELIANCE.NS" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+      <!-- LEFT: Live Candlestick Chart Area -->
+      <div class="binomo-chart-section">
+        <div class="binomo-chart-header">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span id="pracTvSymbolLabel" style="font-family: var(--font-mono); font-weight: 700; color: #60a5fa; background: rgba(59,130,246,0.15); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3); font-size: 13px;">NASDAQ:NVDA • [1m]</span>
+            <span id="binomoSignalBadge" style="font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; border: 1px solid #10b981; background: rgba(16,185,129,0.15); color: #10b981;">
+              AI: STRONG BUY (85/100)
+            </span>
+          </div>
+          <!-- Timeframe selector -->
+          <div class="binomo-tf-bar">
+            <span style="font-size: 10px; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">TF:</span>
+            <button class="macro-btn tf-btn active" id="pracTfBtn_1m" onclick="setPracticeTimeframe('1m', '1')">1m</button>
+            <button class="macro-btn tf-btn" id="pracTfBtn_5m" onclick="setPracticeTimeframe('5m', '5')">5m</button>
+            <button class="macro-btn tf-btn" id="pracTfBtn_15m" onclick="setPracticeTimeframe('15m', '15')">15m</button>
+            <button class="macro-btn tf-btn" id="pracTfBtn_30m" onclick="setPracticeTimeframe('30m', '30')">30m</button>
+            <button class="macro-btn tf-btn" id="pracTfBtn_1h" onclick="setPracticeTimeframe('1h', '60')">1H</button>
+            <button class="macro-btn tf-btn" id="pracTfBtn_1d" onclick="setPracticeTimeframe('1d', 'D')">1D</button>
+          </div>
         </div>
-        <div>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label style="font-size: 11px; color: var(--text-muted); display: block;">Buy Allocation ($ USD)</label>
-            <div style="display: flex; gap: 4px;">
-              <span onclick="quickFillPracticeAmount(100)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$100</span>
-              <span onclick="quickFillPracticeAmount(250)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$250</span>
-              <span onclick="quickFillPracticeAmount(500)" style="font-size: 10px; color: #60a5fa; cursor: pointer; text-decoration: underline;">$500</span>
+
+        <!-- Real-Time AI Chart Timing & Confluence Radar -->
+        <div id="pracTimingRadar" class="binomo-timing-banner">
+          <div class="timing-col-left">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span id="timingActionBadge" class="timing-action-badge">▲ PERFECT TIME TO BUY</span>
+              <span id="timingScorePill" class="timing-score-pill">85/100 Score</span>
+              <span id="timingTypePill" class="timing-type-pill">CONFLUENCE</span>
+            </div>
+            <div id="timingReasonText" class="timing-reason-text">
+              Analyzing chart for optimal execution timestamp...
             </div>
           </div>
-          <input type="number" id="pracInputAmount" value="250" min="10" max="1000" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+          
+          <div class="timing-col-right">
+            <div class="timing-time-box">
+              <span class="timing-box-label">🎯 Signal Timestamp</span>
+              <span id="timingTriggerTime" class="timing-box-val">--:--:-- IST</span>
+            </div>
+            <div class="timing-time-box">
+              <span class="timing-box-label">⏱️ Entry Window</span>
+              <span id="timingWindowVal" class="timing-box-val">--:-- – --:--</span>
+            </div>
+            <div class="timing-time-box highlight">
+              <span class="timing-box-label">⏳ Next Candle Close</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span id="timingNextBarTime" class="timing-box-val" style="font-weight: 700;">--:--:--</span>
+                <span id="timingCountdownBadge" class="timing-countdown-badge">00:00s</span>
+              </div>
+            </div>
+            <button type="button" id="timingApplyBtn" onclick="applyTimingToConsole()" class="timing-apply-btn" title="Pre-fill console with this optimal setup">
+              ⚡ Apply Setup
+            </button>
+            <button type="button" onclick="analyzeCurrentChartTiming(true)" class="timing-refresh-btn" title="Re-analyze chart timing">
+              ↻
+            </button>
+          </div>
         </div>
-        <div>
-          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Custom Stop Loss (Optional)</label>
-          <input type="number" id="pracInputSL" placeholder="Auto 5% SL" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
+
+        <!-- Embedded Live TradingView Chart Frame -->
+        <div class="binomo-chart-wrapper">
+          <iframe
+            id="practice_tv_iframe"
+            src="about:blank"
+            allowtransparency="true"
+            scrolling="no"
+            allowfullscreen>
+          </iframe>
         </div>
-        <div>
-          <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">Take Profit (Optional)</label>
-          <input type="number" id="pracInputTP" placeholder="Auto 5% TP" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px;">
-        </div>
-        <div style="display: flex; gap: 6px;">
-          <button class="primary" onclick="submitPracticeOrder('BUY')" style="flex: 1; padding: 8px 6px; background: #10b981; border-color: #10b981; font-weight: 700; font-size: 12px; cursor: pointer; white-space: nowrap;">
-            🛒 Buy Stock
-          </button>
-          <button type="button" onclick="submitPracticeOrder('SELL')" style="flex: 1; padding: 8px 6px; background: #ef4444; border-color: #ef4444; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; white-space: nowrap;">
-            🔴 Sell / Close
-          </button>
+
+        <!-- Live Holdings Quick-Exit Strip Below Chart -->
+        <div style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+          <div id="pracHoldingsChips" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px;"></div>
+          <div style="font-size: 11px; color: var(--text-muted);">
+            Available Cash: <span id="pracConsoleCash" style="color: #10b981; font-weight: 700;">$1,000.00</span>
+          </div>
         </div>
       </div>
-      <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px;">
-        <span>💡 <strong>BUY:</strong> Deploys credits into a position. <strong>SELL / CLOSE:</strong> Exits the holding for the specified ticker and books realized P&L into your cash balance.</span>
-        <span>Auto 5% Stop-Loss & Take-Profit applied if left blank.</span>
+
+      <!-- RIGHT: Binomo Trading Dock -->
+      <div class="binomo-trade-dock">
+        
+        <!-- Asset Header & Live Pulsing Price -->
+        <div class="binomo-dock-header">
+          <div>
+            <div id="binomoAssetTitle" style="font-size: 16px; font-weight: 800; color: #fff; letter-spacing: -0.02em;">NVDA</div>
+            <div id="binomoPriceChange" class="price-change positive" style="font-size: 11px;">+43.2% Target Upside</div>
+          </div>
+          <div style="text-align: right;">
+            <div id="binomoLivePrice" class="binomo-live-price">$231.62</div>
+            <div style="font-size: 10px; color: #10b981; display: flex; align-items: center; justify-content: flex-end; gap: 4px;">
+              <span class="pulse-indicator-green"></span> LIVE QUOTE
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom Symbol Input (for any other ticker) -->
+        <div style="margin-top: 4px;">
+          <label style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; display: block; margin-bottom: 4px;">Asset Ticker</label>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" id="pracInputSymbol" value="NVDA" placeholder="e.g. NVDA, RELIANCE.NS, XAU/USD" onchange="selectPracticeAsset(this.value)" style="flex: 1; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 7px 10px; border-radius: 6px; font-family: var(--font-mono); font-size: 13px; font-weight: 700;">
+            <button type="button" onclick="selectPracticeAsset(document.getElementById('pracInputSymbol').value)" style="padding: 7px 12px; background: var(--surface-elevated); border: 1px solid var(--border); color: #60a5fa; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer;">Load</button>
+          </div>
+        </div>
+
+        <!-- Expiration / Duration Selector -->
+        <div>
+          <label style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; display: block; margin-bottom: 6px;">Timeframe / Expiry</label>
+          <div class="binomo-time-presets">
+            <button type="button" class="binomo-time-btn active" id="btnExp_1m" onclick="setPracticeTimeframe('1m', '1')">1 min</button>
+            <button type="button" class="binomo-time-btn" id="btnExp_5m" onclick="setPracticeTimeframe('5m', '5')">5 min</button>
+            <button type="button" class="binomo-time-btn" id="btnExp_15m" onclick="setPracticeTimeframe('15m', '15')">15 min</button>
+            <button type="button" class="binomo-time-btn" id="btnExp_30m" onclick="setPracticeTimeframe('30m', '30')">30 min</button>
+            <button type="button" class="binomo-time-btn" id="btnExp_1h" onclick="setPracticeTimeframe('1h', '60')">1 hr</button>
+          </div>
+        </div>
+
+        <!-- Investment Amount Section with Steppers -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">Investment ($ USD)</label>
+            <span onclick="setPracticeAmountMax()" style="font-size: 10px; color: #60a5fa; cursor: pointer; font-weight: 700; text-decoration: underline;">Max All</span>
+          </div>
+          
+          <div class="binomo-amount-stepper">
+            <button type="button" onclick="adjustPracticeAmount(-50)" class="stepper-btn">−</button>
+            <input type="number" id="pracInputAmount" value="250" min="10" max="1000" oninput="updateBinomoPayout()" style="flex: 1; text-align: center; background: transparent; border: none; color: #fff; font-family: var(--font-mono); font-size: 18px; font-weight: 800;">
+            <button type="button" onclick="adjustPracticeAmount(50)" class="stepper-btn">+</button>
+          </div>
+
+          <!-- Quick Amount Chips -->
+          <div class="binomo-amount-chips">
+            <button type="button" onclick="setPracticeAmountPreset(50)">$50</button>
+            <button type="button" onclick="setPracticeAmountPreset(100)">$100</button>
+            <button type="button" onclick="setPracticeAmountPreset(250)">$250</button>
+            <button type="button" onclick="setPracticeAmountPreset(500)">$500</button>
+          </div>
+        </div>
+
+        <!-- Dynamic Payout & Projected Profit Box (Binomo Signature) -->
+        <div class="binomo-payout-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span style="font-size: 11px; color: #94a3b8; font-weight: 600;">Expected Target Payout:</span>
+            <span id="binomoExpectedProfit" style="font-family: var(--font-mono); font-weight: 800; color: #10b981; font-size: 13px;">+$12.50 (+5.0%)</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; color: #64748b;">Total Capital Returned:</span>
+            <span id="binomoTotalPayout" style="font-family: var(--font-mono); font-weight: 700; color: #fff; font-size: 14px;">$262.50</span>
+          </div>
+        </div>
+
+        <!-- Risk Protection: SL & TP -->
+        <div style="background: rgba(15,23,42,0.6); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 10px; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">🛡️ Risk Protection</span>
+            <span style="font-size: 10px; color: #818cf8;">Auto-Bracket</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>
+              <span style="font-size: 10px; color: #ef4444; display: block; margin-bottom: 2px;">Stop Loss</span>
+              <input type="number" id="pracInputSL" placeholder="Auto -5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 4px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px;">
+            </div>
+            <div>
+              <span style="font-size: 10px; color: #10b981; display: block; margin-bottom: 2px;">Take Profit</span>
+              <input type="number" id="pracInputTP" placeholder="Auto +5%" step="0.01" style="width: 100%; background: var(--surface-elevated); border: 1px solid var(--border); color: #fff; padding: 4px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Timing Status Notice in Trade Dock -->
+        <div id="dockTimingNotice" style="background: rgba(16,185,129,0.12); border: 1px solid #10b981; border-radius: 6px; padding: 8px 10px; font-size: 11px; margin-top: 4px; display: flex; align-items: center; justify-content: space-between; transition: all 0.3s ease;">
+          <div>
+            <div id="dockTimingHeader" style="font-weight: 800; color: #10b981; font-size: 11px; letter-spacing: 0.02em;">▲ OPTIMAL BUY WINDOW ACTIVE</div>
+            <div id="dockTimingSub" style="color: #cbd5e1; font-size: 10px; margin-top: 1px;">Trigger: --:--:-- IST • Next Bar Close</div>
+          </div>
+          <span id="dockCountdownPill" style="font-family: var(--font-mono); font-weight: 800; color: #10b981; background: rgba(16,185,129,0.2); padding: 3px 6px; border-radius: 4px; font-size: 11px; border: 1px solid rgba(16,185,129,0.3);">00:00s</span>
+        </div>
+
+        <!-- THE ICONIC BINOMO ACTION BUTTONS: UP (BUY) and DOWN (SELL) -->
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 4px;">
+          
+          <!-- UP / CALL BUTTON -->
+          <button type="button" onclick="submitPracticeOrder('BUY')" class="binomo-btn-up" title="Open Long / Buy Position with Virtual Credits">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 22px; line-height: 1;">▲</span>
+              <div style="text-align: left;">
+                <div style="font-size: 15px; font-weight: 800; letter-spacing: 0.02em;">▲ UP / BUY</div>
+                <div style="font-size: 10px; opacity: 0.85; font-weight: 600;">🛒 Buy Stock • Follow Bullish Setup</div>
+              </div>
+            </div>
+            <div style="text-align: right; font-family: var(--font-mono); font-size: 12px; font-weight: 800;">
+              +5.0%
+            </div>
+          </button>
+
+          <!-- DOWN / PUT BUTTON -->
+          <button type="button" onclick="submitPracticeOrder('SELL')" class="binomo-btn-down" title="Exit / Close Position or Sell">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 22px; line-height: 1;">▼</span>
+              <div style="text-align: left;">
+                <div style="font-size: 15px; font-weight: 800; letter-spacing: 0.02em;">▼ DOWN / SELL</div>
+                <div style="font-size: 10px; opacity: 0.85; font-weight: 600;">🔴 Sell / Close • Lock Gains or Exit</div>
+              </div>
+            </div>
+            <div style="text-align: right; font-family: var(--font-mono); font-size: 12px; font-weight: 800;">
+              EXIT
+            </div>
+          </button>
+
+        </div>
+
+        <div style="font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 4px;">
+          Practice Mode • 100% Risk Free • Zero Real Money Involved
+        </div>
+
       </div>
     </div>
 
-    <!-- Practice Open Positions Table -->
-    <div class="card" style="margin-top: 18px;">
-      <div class="card-title">
-        <span>🟢 Active Practice Positions</span>
-        <span id="pracOpenMeta" style="font-family: var(--font-mono); font-size: 11px;">0 active positions</span>
+    <!-- Binomo Bottom Drawer (Active Positions, History, AI Signals) -->
+    <div class="binomo-drawer" style="margin-top: 20px;">
+      <!-- Tab Controls -->
+      <div class="binomo-drawer-tabs">
+        <button type="button" class="drawer-tab active" id="tabDrawerOpen" onclick="switchPracticeDrawer('open')">
+          🟢 Active Positions (<span id="pracDrawerOpenCount">0</span>)
+        </button>
+        <button type="button" class="drawer-tab" id="tabDrawerHistory" onclick="switchPracticeDrawer('history')">
+          📜 Closed History (<span id="pracDrawerHistCount">0</span>)
+        </button>
+        <button type="button" class="drawer-tab" id="tabDrawerAI" onclick="switchPracticeDrawer('ai')">
+          💡 AI Top Opportunities
+        </button>
       </div>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Shares</th>
-              <th>Entry Price</th>
-              <th>Live Price</th>
-              <th>Invested</th>
-              <th>Current Value</th>
-              <th>Unrealized P&L</th>
-              <th>Stop Loss</th>
-              <th>Take Profit</th>
-              <th>AI Score</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="pracOpenTbody">
-            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active practice positions. Buy a stock or follow AI guidance above to test!</td></tr>
-          </tbody>
-        </table>
+
+      <!-- Drawer Content 1: Active Positions -->
+      <div id="drawerContentOpen" class="drawer-content active">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <span style="font-size: 12px; font-weight: 700; color: #fff;">Currently Held Practice Assets</span>
+          <span id="pracOpenMeta" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">0 active positions</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Shares</th>
+                <th>Entry Price</th>
+                <th>Live Price</th>
+                <th>Invested</th>
+                <th>Current Value</th>
+                <th>Unrealized P&L</th>
+                <th>Stop Loss</th>
+                <th>Take Profit</th>
+                <th>AI Score</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="pracOpenTbody">
+              <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No active practice positions. Click "▲ UP / BUY" to open your first trade!</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      <!-- Drawer Content 2: Closed History -->
+      <div id="drawerContentHistory" class="drawer-content" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <span style="font-size: 12px; font-weight: 700; color: #fff;">Past Realized Trades Log</span>
+          <span id="pracHistoryMeta" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">0 recorded trades</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Action</th>
+                <th>Score</th>
+                <th>Entry Price</th>
+                <th>Exit Price</th>
+                <th>Invested</th>
+                <th>Proceeds</th>
+                <th>Realized P&L</th>
+                <th>Outcome</th>
+                <th>Exit Reason</th>
+                <th>Exit Time</th>
+              </tr>
+            </thead>
+            <tbody id="pracHistoryTbody">
+              <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No closed practice trades yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Drawer Content 3: AI Radar Guidance -->
+      <div id="drawerContentAI" class="drawer-content" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <span style="font-size: 12px; font-weight: 700; color: #fff;">💡 Top High-Confluence AI Setups</span>
+          <button class="macro-btn" onclick="fetchAIGuidance()" style="padding: 2px 8px; font-size: 11px;">↻ Refresh Setups</button>
+        </div>
+        <div id="aiGuidanceGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+          <div style="color: var(--text-muted); font-size: 12px; padding: 15px; text-align: center; grid-column: 1 / -1;">
+            Loading AI recommendations...
+          </div>
+        </div>
+      </div>
+
     </div>
 
-    <!-- Practice Trade Records Audit Table -->
-    <div class="card" style="margin-top: 18px;">
-      <div class="card-title" style="flex-wrap: wrap; gap: 8px;">
-        <div>
-          <span style="font-size: 14px; font-weight: 700;">📜 Practice Trade History & Accuracy Records</span>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Your personal record of trades executed according to AI guidance vs your own timing.</div>
-        </div>
-        <span id="pracHistoryMeta" style="font-family: var(--font-mono); font-size: 11px;">0 recorded trades</span>
-      </div>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Action Flow</th>
-              <th>Score</th>
-              <th>Entry Price</th>
-              <th>Exit Price</th>
-              <th>Invested</th>
-              <th>Proceeds</th>
-              <th>Realized P&L</th>
-              <th>Outcome</th>
-              <th>Exit Reason</th>
-              <th>Exit Time</th>
-            </tr>
-          </thead>
-          <tbody id="pracHistoryTbody">
-            <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 22px;">No closed practice trades yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div> <!-- end #practiceView -->
+  </div>
   </div>
 
   <!-- FLOATING AI CHATBOT BUTTON & DRAWER -->
@@ -1962,8 +2804,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="ai-chat-drawer" id="aiChatDrawer">
     <div class="ai-chat-header">
       <div class="ai-chat-title">
-        <span>🤖 AlphaQuant AI</span>
-        <span class="ai-model-badge">Free 120B / MoE</span>
+        <span>🤖 AlphaQuant AI Copilot</span>
+        <span class="ai-model-badge" style="background: rgba(16,185,129,0.2); color: #10b981; border-color: rgba(16,185,129,0.4);">⚡ Full Execution Access</span>
       </div>
       <button onclick="toggleChatDrawer()" style="background: none; border: none; color: #94a3b8; font-size: 16px; padding: 0 4px; cursor: pointer;">✕</button>
     </div>
@@ -1972,24 +2814,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span>🎯 Target:</span>
       <strong id="aiActiveSym" style="color: #60a5fa;">NVDA</strong>
       <span id="aiActivePrice">($229.35)</span>
+      <span style="margin-left: auto; font-size: 10px; color: #10b981; font-weight: 700;">🟢 EXECUTION READY</span>
     </div>
 
     <div class="ai-quick-prompts">
+      <div class="quick-chip" onclick="askQuickPrompt('Buy $250 of active stock in Practice sandbox')">🛒 Buy $250 Target</div>
+      <div class="quick-chip" onclick="askQuickPrompt('Close / exit my position for the active stock')">🔴 Exit Target</div>
+      <div class="quick-chip" onclick="askQuickPrompt('Set AI to trade only NVDA, TSLA, and BTC')">🎯 Focus AI Universe</div>
+      <div class="quick-chip" onclick="askQuickPrompt('Reset my practice balance back to $1,000')">↺ Reset Demo</div>
       <div class="quick-chip" onclick="askQuickPrompt('Analyze the current setup for this stock: entry, risk, and technical bias.')">⚡ Full Analysis</div>
-      <div class="quick-chip" onclick="askQuickPrompt('Explain the Stop Loss level and maximum drawdown risk.')">🛑 Stop Loss Audit</div>
-      <div class="quick-chip" onclick="askQuickPrompt('Compare the institutional analyst price targets vs the current technical momentum.')">🎯 Price Target vs RSI</div>
-      <div class="quick-chip" onclick="askQuickPrompt('Is this in an accumulation or distribution phase based on RVOL and EMAs?')">📊 Volume & Phase</div>
     </div>
 
     <div class="ai-chat-messages" id="aiChatMessages">
       <div class="chat-bubble assistant">
-        Hello! I'm <strong>AlphaQuant AI</strong>. I have real-time access to live quantitative indicators, institutional consensus, and exact Stop-Loss / Take-Profit calculations for both US and Indian equities.<br><br>
-        Ask me anything about the active stock or overall market structure!
+        Hello! I'm <strong>AlphaQuant AI Copilot</strong>. I have <strong>full autonomous execution privileges</strong> across this platform.<br><br>
+        You can talk to me or command me directly:
+        <ul style="margin: 6px 0 6px 18px; padding: 0; line-height: 1.5; font-size: 11px;">
+          <li><strong>Trade Execution:</strong> <em>"Buy $200 NVDA"</em> or <em>"Sell my Apple position"</em></li>
+          <li><strong>AI Universe Selection:</strong> <em>"Set AI to trade only NVDA, TSLA, and BTC"</em></li>
+          <li><strong>Controls:</strong> <em>"Pause auto trading"</em> or <em>"Reset demo balance"</em></li>
+          <li><strong>Quant Analysis:</strong> <em>"Analyze NVDA RSI, EMAs, and Stop Loss"</em></li>
+        </ul>
+        Whatever you tell me to do, I execute it directly on the platform!
       </div>
     </div>
 
     <div class="ai-chat-footer">
-      <input type="text" id="aiChatInput" placeholder="Ask about this stock..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+      <input type="text" id="aiChatInput" placeholder="Command AI: 'Buy $200 NVDA', 'Sell AAPL', 'Set AI to trade BTC'..." onkeydown="if(event.key==='Enter') sendChatMessage()">
       <button class="primary" onclick="sendChatMessage()" style="padding: 8px 14px;">Send</button>
     </div>
   </div>
@@ -2089,7 +2940,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       // strip the slash so TradingView treats it as a single market instrument
       // rather than a mathematical ratio formula (which locks to 1D only!).
       if (sym.includes('/')) {
-        const clean = sym.replace(/\//g, '');
+        const clean = sym.split('/').join('');
         if (SPECIAL_TV_MAP[clean]) {
           return SPECIAL_TV_MAP[clean];
         }
@@ -2238,6 +3089,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (practiceView) practiceView.style.display = 'block';
         fetchPracticePortfolio();
         fetchAIGuidance();
+        updatePracticeChart();
+        fetchPracticeLiveQuote(currentPracticeSymbol || 'NVDA');
+        analyzeCurrentChartTiming();
       } else if (tabKey === 'AI') {
         if (tabUS) tabUS.className = 'market-tab';
         if (tabIN) tabIN.className = 'market-tab';
@@ -2247,6 +3101,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (practiceView) practiceView.style.display = 'none';
         if (aiTraderView) aiTraderView.style.display = 'block';
         fetchPortfolio();
+        fetchAIUniverseSymbols();
       } else {
         if (tabAI) tabAI.className = 'market-tab';
         if (tabPractice) tabPractice.className = 'market-tab';
@@ -2317,7 +3172,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       activeResult = data;
       if (data && data.symbol) currentChartSymbol = data.symbol;
       const tfText = (data.timeframe || currentAnalysisTimeframe || '1D').toUpperCase();
-      document.getElementById('updateTime').innerText = `Live • [${tfText}] • ` + new Date().toLocaleTimeString();
+      document.getElementById('updateTime').innerText = `Live • [${tfText}] • ` + new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) + ' IST';
       document.getElementById('heroSymbol').innerText = data.symbol;
       document.getElementById('heroName').innerText = data.name || data.symbol;
 
@@ -2747,7 +3602,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             message: msg,
-            symbol: activeResult ? activeResult.symbol : 'NVDA',
+            symbol: (currentPracticeSymbol || (activeResult ? activeResult.symbol : 'NVDA')),
+            active_symbol: (currentPracticeSymbol || (activeResult ? activeResult.symbol : 'NVDA')),
+            timeframe: (currentPracticeTfLabel || '1m'),
             history: chatHistory
           })
         });
@@ -2757,12 +3614,153 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const replyBubble = document.createElement('div');
         replyBubble.className = 'chat-bubble assistant';
         replyBubble.innerHTML = formatMarkdown(data.reply || 'No response.');
+
+        if (data.action_executed) {
+          const act = data.action_executed;
+          const actCard = document.createElement('div');
+          actCard.className = 'chat-action-card';
+          actCard.innerHTML = `
+            <div class="action-header">⚡ SYSTEM ACTION EXECUTED: ${act.type || 'EXECUTE'}</div>
+            <div style="font-family: var(--font-mono); font-size: 11px;">${act.summary || 'Command processed successfully.'}</div>
+          `;
+          replyBubble.appendChild(actCard);
+
+          if (act.refresh_practice) fetchPracticePortfolio();
+          if (act.refresh_portfolio) fetchPortfolio();
+          if (act.refresh_universe) fetchAIUniverseSymbols();
+          if (act.switch_symbol) {
+            selectPracticeAsset(act.switch_symbol);
+          }
+        }
+
         chatBox.appendChild(replyBubble);
         chatBox.scrollTop = chatBox.scrollHeight;
 
         chatHistory.push({role: 'assistant', content: data.reply || ''});
       } catch (e) {
         typingBubble.innerHTML = '<span style="color:#ef4444;">Error getting response: ' + e + '</span>';
+      }
+    }
+
+    /* ========================================================= */
+    /* AI TRADING UNIVERSE & ASSET SELECTOR JAVASCRIPT LOGIC     */
+    /* ========================================================= */
+    let allAvailableUniverseSymbols = [];
+    let currentSelectedUniverseSymbols = [];
+
+    async function fetchAIUniverseSymbols() {
+      try {
+        const res = await fetch('/api/ai-trader/symbols');
+        const data = await res.json();
+        if (!data) return;
+
+        allAvailableUniverseSymbols = data.all_available || [];
+        currentSelectedUniverseSymbols = data.selected || [];
+        renderAIUniverseChips();
+      } catch (e) {
+        console.error('Error fetching AI universe symbols:', e);
+      }
+    }
+
+    function renderAIUniverseChips() {
+      const grid = document.getElementById('aiUniverseChipsGrid');
+      const badge = document.getElementById('aiUniverseCountBadge');
+      if (badge) {
+        badge.innerText = `${currentSelectedUniverseSymbols.length} Allowed Assets`;
+        badge.style.color = currentSelectedUniverseSymbols.length > 0 ? '#10b981' : '#ef4444';
+      }
+      if (!grid) return;
+
+      if (!allAvailableUniverseSymbols || allAvailableUniverseSymbols.length === 0) {
+        grid.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 10px; text-align: center; grid-column: 1 / -1;">No symbols available.</div>';
+        return;
+      }
+
+      grid.innerHTML = '';
+      allAvailableUniverseSymbols.forEach(item => {
+        const sym = item.symbol;
+        const isSelected = currentSelectedUniverseSymbols.includes(sym);
+        const chip = document.createElement('div');
+        chip.className = 'universe-chip' + (isSelected ? ' selected' : '');
+        chip.onclick = () => toggleAIUniverseSymbol(sym);
+
+        const marketBadge = item.market === 'IN' ? '🇮🇳' : (item.market === 'US' ? '🇺🇸' : '🪙');
+        chip.innerHTML = `
+          <div>
+            <span style="font-size: 10px; margin-right: 4px;">${marketBadge}</span>
+            <span class="chip-symbol">${sym}</span>
+          </div>
+          <span class="chip-check">${isSelected ? '✓ ON' : '○ OFF'}</span>
+        `;
+        grid.appendChild(chip);
+      });
+    }
+
+    function toggleAIUniverseSymbol(sym) {
+      sym = sym.toUpperCase().trim();
+      const idx = currentSelectedUniverseSymbols.indexOf(sym);
+      if (idx >= 0) {
+        currentSelectedUniverseSymbols.splice(idx, 1);
+      } else {
+        currentSelectedUniverseSymbols.push(sym);
+      }
+      renderAIUniverseChips();
+    }
+
+    function selectUniversePreset(preset) {
+      if (preset === 'ALL') {
+        currentSelectedUniverseSymbols = allAvailableUniverseSymbols.map(s => s.symbol);
+      } else if (preset === 'NONE') {
+        currentSelectedUniverseSymbols = [];
+      } else if (preset === 'US') {
+        currentSelectedUniverseSymbols = allAvailableUniverseSymbols.filter(s => s.market === 'US').map(s => s.symbol);
+      } else if (preset === 'IN') {
+        currentSelectedUniverseSymbols = allAvailableUniverseSymbols.filter(s => s.market === 'IN').map(s => s.symbol);
+      } else if (preset === 'CRYPTO_COMMODITY') {
+        currentSelectedUniverseSymbols = allAvailableUniverseSymbols.filter(s => s.market === 'CRYPTO_COMMODITY').map(s => s.symbol);
+      }
+      renderAIUniverseChips();
+      saveAIUniverseSelection();
+    }
+
+    function addCustomToAIUniverse() {
+      const input = document.getElementById('aiUniverseCustomInput');
+      if (!input) return;
+      const val = input.value.trim().toUpperCase();
+      if (!val) {
+        showToast('Please enter a ticker symbol to add.');
+        return;
+      }
+
+      if (!currentSelectedUniverseSymbols.includes(val)) {
+        currentSelectedUniverseSymbols.push(val);
+      }
+      if (!allAvailableUniverseSymbols.some(s => s.symbol === val)) {
+        allAvailableUniverseSymbols.push({symbol: val, name: val, market: 'CUSTOM'});
+      }
+      input.value = '';
+      renderAIUniverseChips();
+      saveAIUniverseSelection();
+    }
+
+    async function saveAIUniverseSelection() {
+      try {
+        const res = await fetch('/api/ai-trader/symbols', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            symbols: currentSelectedUniverseSymbols,
+            enabled: true
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`✓ AI Universe Saved: ${data.count} assets active for autonomous trading`);
+        } else {
+          showToast('Failed to save universe selection.');
+        }
+      } catch (e) {
+        showToast('Error saving universe: ' + e);
       }
     }
 
@@ -3345,20 +4343,348 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    /* ========================================================= */
+    /* BINOMO-STYLE PRACTICE SANDBOX JAVASCRIPT LOGIC           */
+    /* ========================================================= */
+    let currentPracticeSymbol = 'NVDA';
+    let currentPracticeTf = '1';
+    let currentPracticeTfLabel = '1m';
+
+    function selectPracticeAsset(sym) {
+      if (!sym) return;
+      sym = sym.toUpperCase().trim();
+      currentPracticeSymbol = sym;
+
+      const symInput = document.getElementById('pracInputSymbol');
+      if (symInput) symInput.value = sym;
+
+      const titleEl = document.getElementById('binomoAssetTitle');
+      if (titleEl) titleEl.innerText = sym;
+
+      // Update active asset chip in the top ribbon
+      const chips = document.querySelectorAll('.binomo-asset-chip');
+      chips.forEach(chip => {
+        if (chip.getAttribute('data-sym') === sym) {
+          chip.classList.add('active');
+        } else {
+          chip.classList.remove('active');
+        }
+      });
+
+      updatePracticeChart(sym);
+      fetchPracticeLiveQuote(sym);
+      analyzeCurrentChartTiming(sym);
+    }
+
     function quickFillPracticeTicker(sym) {
-      const input = document.getElementById('pracInputSymbol');
-      if (input) {
-        input.value = sym;
-        input.focus();
-        showToast(`Selected ${sym} in Practice console`);
-      }
+      selectPracticeAsset(sym);
     }
 
     function quickFillPracticeAmount(amt) {
+      setPracticeAmountPreset(amt);
+    }
+
+    function updatePracticeChart(sym) {
+      sym = sym || currentPracticeSymbol || 'NVDA';
+      const tvSym = toTradingViewSymbol(sym);
+      const labelEl = document.getElementById('pracTvSymbolLabel');
+      if (labelEl) {
+        labelEl.innerText = `${tvSym} • [${currentPracticeTfLabel}]`;
+      }
+      const iframe = document.getElementById('practice_tv_iframe');
+      if (iframe) {
+        const newSrc = `https://s.tradingview.com/widgetembed/?frameElementId=practice_tv_iframe&symbol=${encodeURIComponent(tvSym)}&interval=${currentPracticeTf}&hidesidetoolbar=1&symboledit=1&saveimage=0&toolbarbg=0a0e17&studies=[]&theme=dark&style=1&timezone=Asia%2FKolkata&studies_overrides={}&overrides={}&enabled_features=[]&disabled_features=[]&locale=en&utm_source=localhost`;
+        if (iframe.src !== newSrc) {
+          iframe.src = newSrc;
+        }
+      }
+    }
+
+    function setPracticeTimeframe(tfLabel, tfCode) {
+      currentPracticeTfLabel = tfLabel;
+      currentPracticeTf = tfCode;
+
+      // Update chart header buttons
+      const tfButtons = document.querySelectorAll('.binomo-tf-bar .tf-btn');
+      tfButtons.forEach(btn => btn.classList.remove('active'));
+      const activeBtn = document.getElementById(`pracTfBtn_${tfLabel}`);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      // Update dock buttons
+      const dockTfButtons = document.querySelectorAll('.binomo-time-presets .binomo-time-btn');
+      dockTfButtons.forEach(btn => btn.classList.remove('active'));
+      const activeDockBtn = document.getElementById(`btnExp_${tfLabel}`);
+      if (activeDockBtn) activeDockBtn.classList.add('active');
+
+      updatePracticeChart(currentPracticeSymbol);
+      fetchPracticeLiveQuote(currentPracticeSymbol);
+      analyzeCurrentChartTiming(currentPracticeSymbol);
+    }
+
+    async function fetchPracticeLiveQuote(sym) {
+      sym = sym || currentPracticeSymbol || 'NVDA';
+      try {
+        const res = await fetch(`/api/analyze?symbol=${encodeURIComponent(sym)}`);
+        const data = await res.json();
+        if (!data || data.error) return;
+
+        const isINR = data.currency === 'INR' || sym.endsWith('.NS') || sym.endsWith('.BO');
+        const currSign = isINR ? '₹' : '$';
+        const price = data.current_price || 0;
+
+        const livePriceEl = document.getElementById('binomoLivePrice');
+        if (livePriceEl && price > 0) {
+          livePriceEl.innerText = `${currSign}${price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        }
+
+        const priceChangeEl = document.getElementById('binomoPriceChange');
+        if (priceChangeEl) {
+          const upside = data.upside_pct || 0;
+          const uSign = upside >= 0 ? '+' : '';
+          priceChangeEl.innerText = `${uSign}${upside.toFixed(1)}% Target Upside`;
+          priceChangeEl.className = 'price-change ' + (upside >= 0 ? 'positive' : 'negative');
+        }
+
+        const badgeEl = document.getElementById('binomoSignalBadge');
+        if (badgeEl) {
+          const sig = data.signal || 'HOLD';
+          const score = data.score || 50;
+          let badgeColor = '#60a5fa';
+          let badgeBg = 'rgba(96,165,250,0.15)';
+          if (sig.includes('BUY')) {
+            badgeColor = '#10b981';
+            badgeBg = 'rgba(16,185,129,0.15)';
+          } else if (sig.includes('SELL')) {
+            badgeColor = '#ef4444';
+            badgeBg = 'rgba(239,68,68,0.15)';
+          }
+          badgeEl.style.borderColor = badgeColor;
+          badgeEl.style.background = badgeBg;
+          badgeEl.style.color = badgeColor;
+          badgeEl.innerText = `AI: ${sig} (${score}/100)`;
+        }
+
+        const slInput = document.getElementById('pracInputSL');
+        const tpInput = document.getElementById('pracInputTP');
+        if (price > 0) {
+          const ex = data.execution || {};
+          const slVal = ex.stop_loss ? ex.stop_loss.toFixed(2) : (price * 0.95).toFixed(2);
+          const tpVal = ex.take_profit_1 ? ex.take_profit_1.toFixed(2) : (price * 1.05).toFixed(2);
+          if (slInput) slInput.placeholder = `${currSign}${slVal} (-5%)`;
+          if (tpInput) tpInput.placeholder = `${currSign}${tpVal} (+5%)`;
+        }
+
+        updateBinomoPayout();
+      } catch (e) {
+        console.error('Error fetching live quote for ' + sym, e);
+      }
+    }
+
+    let currentTimingData = null;
+    let timingCountdownInterval = null;
+    let timingSecondsRemaining = 60;
+
+    async function analyzeCurrentChartTiming(force = false) {
+      const sym = currentPracticeSymbol || 'NVDA';
+      const tf = currentPracticeTfLabel || '1m';
+      try {
+        const res = await fetch(`/api/chart-timing?symbol=${encodeURIComponent(sym)}&timeframe=${encodeURIComponent(tf)}`);
+        const data = await res.json();
+        if (!data || data.error) return;
+
+        currentTimingData = data;
+        const t = data.timing || {};
+        const ex = data.execution || {};
+
+        // 1. Action Badge & Styles
+        const badge = document.getElementById('timingActionBadge');
+        const radar = document.getElementById('pracTimingRadar');
+        const dockNotice = document.getElementById('dockTimingNotice');
+        const dockHeader = document.getElementById('dockTimingHeader');
+        const dockSub = document.getElementById('dockTimingSub');
+
+        const act = (t.action || 'WAIT').toUpperCase();
+        let badgeClass = 'timing-action-badge';
+        let accentColor = '#60a5fa';
+
+        if (act === 'BUY') {
+          badgeClass = 'timing-action-badge';
+          accentColor = '#10b981';
+          if (dockHeader) dockHeader.innerText = '▲ OPTIMAL BUY WINDOW ACTIVE';
+        } else if (act === 'SELL') {
+          badgeClass = 'timing-action-badge sell';
+          accentColor = '#ef4444';
+          if (dockHeader) dockHeader.innerText = '▼ OPTIMAL SELL WINDOW ACTIVE';
+        } else {
+          badgeClass = 'timing-action-badge wait';
+          accentColor = '#60a5fa';
+          if (dockHeader) dockHeader.innerText = '⏳ MONITORING CONSOLIDATION';
+        }
+
+        if (badge) {
+          badge.className = badgeClass;
+          badge.innerText = t.action_label || `${act} WINDOW`;
+        }
+        if (radar) {
+          radar.style.borderColor = accentColor;
+        }
+        if (dockNotice) {
+          dockNotice.style.borderColor = accentColor;
+          dockNotice.style.background = `${accentColor}18`;
+        }
+
+        // 2. Score & Type Pills
+        const scorePill = document.getElementById('timingScorePill');
+        if (scorePill) scorePill.innerText = `${data.score || 50}/100 Score`;
+
+        const typePill = document.getElementById('timingTypePill');
+        if (typePill) typePill.innerText = t.trigger_type ? t.trigger_type.replace(/_/g, ' ') : 'CONFLUENCE';
+
+        // 3. Reason Text
+        const reasonEl = document.getElementById('timingReasonText');
+        if (reasonEl) {
+          reasonEl.innerText = t.trigger_reason || t.instruction || 'Analyzing confluence signals across moving averages...';
+        }
+
+        // 4. Timestamps
+        const trigEl = document.getElementById('timingTriggerTime');
+        if (trigEl) trigEl.innerText = t.trigger_time_short || '--:--:--';
+
+        const winEl = document.getElementById('timingWindowVal');
+        if (winEl) winEl.innerText = t.optimal_window || '--:-- – --:--';
+
+        const nextBarEl = document.getElementById('timingNextBarTime');
+        if (nextBarEl) nextBarEl.innerText = t.next_candle_time_short || '--:--:--';
+
+        if (dockSub) {
+          dockSub.innerText = `Trigger: ${t.trigger_time_short || '--:--'} • TF: ${t.timeframe || tf} • Score: ${data.score}/100`;
+        }
+
+        // 5. Countdown timer setup
+        timingSecondsRemaining = t.seconds_to_next_bar !== undefined ? t.seconds_to_next_bar : 60;
+        updateTimingCountdownDisplay();
+
+        if (timingCountdownInterval) clearInterval(timingCountdownInterval);
+        timingCountdownInterval = setInterval(() => {
+          timingSecondsRemaining--;
+          if (timingSecondsRemaining <= 0) {
+            timingSecondsRemaining = t.interval_seconds || 60;
+            analyzeCurrentChartTiming();
+          }
+          updateTimingCountdownDisplay();
+        }, 1000);
+
+      } catch (err) {
+        console.error('Error fetching chart timing:', err);
+      }
+    }
+
+    function updateTimingCountdownDisplay() {
+      const mins = Math.floor(timingSecondsRemaining / 60);
+      const secs = timingSecondsRemaining % 60;
+      const str = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}s`;
+
+      const badge = document.getElementById('timingCountdownBadge');
+      if (badge) badge.innerText = str;
+
+      const dockPill = document.getElementById('dockCountdownPill');
+      if (dockPill) dockPill.innerText = str;
+    }
+
+    function applyTimingToConsole() {
+      if (!currentTimingData) return;
+      const t = currentTimingData.timing || {};
+      const ex = currentTimingData.execution || {};
+
+      const slInput = document.getElementById('pracInputSL');
+      const tpInput = document.getElementById('pracInputTP');
+      if (ex.stop_loss && slInput) slInput.value = ex.stop_loss;
+      if (ex.take_profit_1 && tpInput) tpInput.value = ex.take_profit_1;
+
+      const act = (t.action || 'BUY').toUpperCase();
+      if (act === 'BUY') {
+        const btnUp = document.querySelector('.binomo-btn-up');
+        if (btnUp) {
+          btnUp.classList.add('pulse-highlight');
+          setTimeout(() => btnUp.classList.remove('pulse-highlight'), 2000);
+        }
+      } else if (act === 'SELL') {
+        const btnDown = document.querySelector('.binomo-btn-down');
+        if (btnDown) {
+          btnDown.classList.add('pulse-highlight');
+          setTimeout(() => btnDown.classList.remove('pulse-highlight'), 2000);
+        }
+      }
+      showToast(`⚡ Perfect timing setup applied for ${currentTimingData.symbol}! Target: ${act}`);
+    }
+
+    function updateBinomoPayout() {
+      const amtInput = document.getElementById('pracInputAmount');
+      const amount = amtInput ? parseFloat(amtInput.value) || 0 : 0;
+      const profitRate = 0.05; // 5% target profit
+      const expectedProfit = amount * profitRate;
+      const totalReturn = amount + expectedProfit;
+
+      const profitEl = document.getElementById('binomoExpectedProfit');
+      if (profitEl) {
+        profitEl.innerText = `+$${expectedProfit.toFixed(2)} (+5.0%)`;
+      }
+      const totalEl = document.getElementById('binomoTotalPayout');
+      if (totalEl) {
+        totalEl.innerText = `$${totalReturn.toFixed(2)}`;
+      }
+    }
+
+    function adjustPracticeAmount(delta) {
       const input = document.getElementById('pracInputAmount');
+      if (!input) return;
+      let val = (parseFloat(input.value) || 0) + delta;
+      if (val < 10) val = 10;
+      if (val > 1000) val = 1000;
+      input.value = val;
+      updateBinomoPayout();
+    }
+
+    function setPracticeAmountPreset(amt) {
+      const input = document.getElementById('pracInputAmount');
+      if (!input) return;
+      input.value = amt;
+      updateBinomoPayout();
+    }
+
+    function setPracticeAmountMax() {
+      const input = document.getElementById('pracInputAmount');
+      const cashEl = document.getElementById('pracCash');
+      let maxVal = 1000;
+      if (cashEl) {
+        const raw = cashEl.innerText.replace(/[^0-9.]/g, '');
+        const parsed = parseFloat(raw);
+        if (!isNaN(parsed) && parsed > 0) maxVal = Math.min(1000, parsed);
+      }
       if (input) {
-        input.value = amt;
-        showToast(`Set practice allocation to $${amt}`);
+        input.value = Math.max(10, Math.floor(maxVal));
+        updateBinomoPayout();
+      }
+    }
+
+    function switchPracticeDrawer(tab) {
+      const tabOpen = document.getElementById('tabDrawerOpen');
+      const tabHist = document.getElementById('tabDrawerHistory');
+      const tabAI = document.getElementById('tabDrawerAI');
+      const contentOpen = document.getElementById('drawerContentOpen');
+      const contentHist = document.getElementById('drawerContentHistory');
+      const contentAI = document.getElementById('drawerContentAI');
+
+      if (tabOpen) tabOpen.className = 'drawer-tab' + (tab === 'open' ? ' active' : '');
+      if (tabHist) tabHist.className = 'drawer-tab' + (tab === 'history' ? ' active' : '');
+      if (tabAI) tabAI.className = 'drawer-tab' + (tab === 'ai' ? ' active' : '');
+
+      if (contentOpen) contentOpen.style.display = (tab === 'open' ? 'block' : 'none');
+      if (contentHist) contentHist.style.display = (tab === 'history' ? 'block' : 'none');
+      if (contentAI) contentAI.style.display = (tab === 'ai' ? 'block' : 'none');
+
+      if (tab === 'ai') {
+        fetchAIGuidance();
       }
     }
 
@@ -3368,7 +4694,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const slInput = document.getElementById('pracInputSL');
       const tpInput = document.getElementById('pracInputTP');
 
-      const symbol = (specificSym || (symInput ? symInput.value : '')).trim().toUpperCase();
+      const symbol = (specificSym || (symInput ? symInput.value : '') || currentPracticeSymbol || 'NVDA').trim().toUpperCase();
       if (!symbol) {
         showToast('Please enter or select a stock ticker to ' + (action === 'SELL' ? 'sell' : 'buy'));
         return;
@@ -3389,7 +4715,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           if (data.success) {
             const sign = (data.pnl || 0) >= 0 ? '+' : '';
             showToast(`✓ Sold ${data.symbol}: Realized P&L ${sign}$${data.pnl} (${sign}${data.pnl_pct}%)!`);
-            if (symInput && symInput.value.toUpperCase().trim() === symbol) symInput.value = '';
             fetchPracticePortfolio();
           } else {
             showToast(`Practice Sell failed: ${data.error || 'Check position'}`);
@@ -3421,7 +4746,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await res.json();
         if (data.success) {
           showToast(`✓ Practice Buy executed: ${data.shares} shares of ${data.symbol} for $${data.invested}!`);
-          if (symInput && symInput.value.toUpperCase().trim() === symbol) symInput.value = '';
           fetchPracticePortfolio();
         } else {
           showToast(`Practice Buy failed: ${data.error || 'Unknown error'}`);
@@ -3472,12 +4796,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (realizedEl) realizedEl.innerText = `${sign}$${(data.realized_pnl || 0).toFixed(2)}`;
       if (closedTradesEl) closedTradesEl.innerText = `${data.total_trades || 0} Closed Trades`;
 
+      // Drawer count badges
+      const drawerOpenCount = document.getElementById('pracDrawerOpenCount');
+      if (drawerOpenCount) drawerOpenCount.innerText = data.positions ? data.positions.length : 0;
+      const drawerHistCount = document.getElementById('pracDrawerHistCount');
+      if (drawerHistCount) drawerHistCount.innerText = data.trade_history ? data.trade_history.length : 0;
+
       // Holdings chips for quick sell in console
       const holdingsContainer = document.getElementById('pracHoldingsChips');
       if (holdingsContainer) {
         if (data.positions && data.positions.length > 0) {
           holdingsContainer.innerHTML = '<span style="color: var(--border); margin: 0 2px;">|</span><span style="color: #f87171; font-weight: 600;">Holdings to Sell:</span>' + 
-            data.positions.map(p => `<button type="button" class="macro-btn" onclick="quickFillPracticeTicker('${p.symbol}')" style="padding: 2px 7px; font-size: 11px; color: #f87171; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.1);">🔴 ${p.symbol} (${p.shares})</button>`).join(' ');
+            data.positions.map(p => `<button type="button" class="macro-btn" onclick="selectPracticeAsset('${p.symbol}')" style="padding: 2px 7px; font-size: 11px; color: #f87171; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.1);">🔴 ${p.symbol} (${p.shares})</button>`).join(' ');
         } else {
           holdingsContainer.innerHTML = '';
         }
@@ -3505,7 +4835,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               : `${currSymbol}${p.current_price.toFixed(2)}`;
 
             tr.innerHTML = `
-              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="loadSingleStock('${p.symbol}')">${p.symbol}</strong></td>
+              <td><strong style="color: #60a5fa; cursor: pointer;" onclick="selectPracticeAsset('${p.symbol}')" title="Click to view chart in Practice">${p.symbol}</strong></td>
               <td style="font-family: var(--font-mono);">${p.shares}</td>
               <td style="font-family: var(--font-mono);">${entryDisplay}</td>
               <td style="font-family: var(--font-mono);">${currDisplay}</td>
@@ -3613,6 +4943,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetchPortfolio();
     fetchPracticePortfolio();
     fetchSignalsFeed();
+    updateBinomoPayout();
+    fetchAIUniverseSymbols();
+    analyzeCurrentChartTiming();
     setInterval(fetchPortfolio, 10000);
     setInterval(fetchPracticePortfolio, 10000);
     setInterval(fetchSignalsFeed, 10000);
@@ -3622,6 +4955,382 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+def execute_action_dict(act: Dict[str, Any], active_symbol: str = "NVDA") -> Optional[Dict[str, Any]]:
+    """Executes a structured action dictionary on the platform."""
+    global ai_auto_trading_enabled, ai_trade_symbols
+    act_type = str(act.get("type", "")).upper()
+    
+    if act_type == "BUY":
+        sym = (act.get("symbol") or active_symbol or "NVDA").upper().strip()
+        amt = float(act.get("amount") or act.get("allocation") or 250.0)
+        curr_price = 0.0
+        currency = "INR" if sym.endswith((".NS", ".BO")) else "USD"
+        res_analysis = None
+        if sym in cached_results:
+            res_analysis = cached_results[sym]
+        else:
+            resolved = client.resolve_symbol(sym)
+            raw = client.get_full_analysis(resolved)
+            if raw and raw.get("analyst"):
+                res_analysis = strategy.analyze(raw)
+                cached_results[resolved] = res_analysis
+        if res_analysis:
+            curr_price = res_analysis.get("current_price", 0.0)
+            score = res_analysis.get("score", 75)
+            ex = res_analysis.get("execution", {})
+            sl = ex.get("stop_loss", round(curr_price * 0.95, 2))
+            tp1 = ex.get("take_profit_1", round(curr_price * 1.05, 2))
+        else:
+            curr_price = 100.0
+            score = 70
+            sl = round(curr_price * 0.95, 2)
+            tp1 = round(curr_price * 1.05, 2)
+        buy_res = practice_portfolio.buy(sym, curr_price, amt, sl, tp1, score=score, signal="AI_AGENTIC_BUY", currency=currency)
+        if buy_res.get("success"):
+            c_sign = "₹" if currency == "INR" else "$"
+            return {
+                "type": "BUY",
+                "symbol": sym,
+                "shares": buy_res["shares"],
+                "invested": buy_res["invested"],
+                "price": curr_price,
+                "summary": f"Executed BUY order: {buy_res['shares']} shares of {sym} for ${buy_res['invested']:.2f} at {c_sign}{curr_price:,.2f} (SL: {c_sign}{sl:,.2f}, TP1: {c_sign}{tp1:,.2f}).",
+                "refresh_practice": True,
+                "refresh_portfolio": True,
+                "switch_symbol": sym
+            }
+        return {"type": "BUY_FAILED", "summary": f"Buy failed: {buy_res.get('error')}"}
+
+    elif act_type == "SELL":
+        sym = (act.get("symbol") or active_symbol).upper().strip()
+        if sym in practice_portfolio.positions:
+            pos = practice_portfolio.positions[sym]
+            live_p = pos.get("current_price") or pos.get("entry_price") or 100.0
+            sell_res = practice_portfolio.sell(sym, price=live_p, exit_reason="AI_AGENTIC_SELL")
+            sign = '+' if sell_res.get("pnl", 0) >= 0 else ''
+            return {
+                "type": "SELL",
+                "symbol": sym,
+                "summary": f"Closed position in {sym} @ {live_p}: Realized P&L {sign}${sell_res.get('pnl', 0):.2f} ({sign}{sell_res.get('pnl_pct', 0):.2f}%).",
+                "pnl": sell_res.get("pnl"),
+                "refresh_practice": True,
+                "refresh_portfolio": True
+            }
+        return {"type": "SELL_FAILED", "summary": f"No active position found for {sym} to sell."}
+
+    elif act_type == "LIQUIDATE_ALL":
+        sold = []
+        for sym, pos in list(practice_portfolio.positions.items()):
+            live_p = pos.get("current_price") or pos.get("entry_price") or 100.0
+            r = practice_portfolio.sell(sym, price=live_p, exit_reason="AI_COMMAND_LIQUIDATE_ALL")
+            sold.append(r)
+        return {
+            "type": "LIQUIDATE_ALL",
+            "summary": f"Liquidated all {len(sold)} practice positions.",
+            "refresh_practice": True,
+            "refresh_portfolio": True
+        }
+
+    elif act_type == "RESET_PRACTICE":
+        res = practice_portfolio.reset()
+        return {
+            "type": "RESET_PRACTICE",
+            "summary": "Restored Practice Sandbox to $1,000.00 virtual credits.",
+            "refresh_practice": True,
+            "refresh_portfolio": True
+        }
+
+    elif act_type == "SET_AI_SYMBOLS":
+        syms = act.get("symbols", [])
+        if syms:
+            ai_trade_symbols = [s.strip().upper() for s in syms if s.strip()]
+            config["ai_trade_symbols"] = ai_trade_symbols
+            save_config(config)
+            return {
+                "type": "SET_AI_SYMBOLS",
+                "summary": f"Updated AI Trading Universe to {len(ai_trade_symbols)} assets: {', '.join(ai_trade_symbols)}",
+                "symbols": ai_trade_symbols,
+                "refresh_universe": True
+            }
+
+    elif act_type == "TOGGLE_AUTO_TRADING":
+        enabled = bool(act.get("enabled", True))
+        ai_auto_trading_enabled = enabled
+        config["ai_auto_trading_enabled"] = enabled
+        save_config(config)
+        return {
+            "type": "TOGGLE_AUTO_TRADING",
+            "summary": f"AI Autonomous Trading Engine {'activated' if enabled else 'paused'}.",
+            "enabled": enabled,
+            "refresh_portfolio": True
+        }
+
+    elif act_type == "RUN_AI_SCAN":
+        eligible = [
+            r for sym, r in cached_results.items()
+            if not ai_trade_symbols or sym in ai_trade_symbols or any(s == sym for s in ai_trade_symbols)
+        ]
+        trade_res = portfolio.process_autonomous_signals(eligible, max_positions=4)
+        buys = len(trade_res.get("buys_executed", []))
+        sells = len(trade_res.get("sells_executed", []))
+        return {
+            "type": "RUN_AI_SCAN",
+            "summary": f"AI Autonomous scan executed: {buys} buys, {sells} exits processed.",
+            "refresh_portfolio": True
+        }
+
+    return None
+
+def execute_agentic_system_command(message: str, active_symbol: str = "NVDA") -> Optional[Dict[str, Any]]:
+    """Deterministic agentic action dispatcher: parses user natural language commands and executes them on the live platform."""
+    global ai_auto_trading_enabled, ai_trade_symbols
+    msg = message.strip()
+    msg_lower = msg.lower()
+
+    # 1. RESET / REFILL PRACTICE SANDBOX
+    if any(k in msg_lower for k in ["reset practice", "reset demo", "reset balance", "refill credits", "refill practice", "refill demo", "reset sandbox", "reset virtual"]):
+        res = practice_portfolio.reset()
+        return {
+            "type": "RESET_PRACTICE",
+            "summary": "Restored Practice Sandbox to $1,000.00 virtual credits.",
+            "details": res,
+            "refresh_practice": True,
+            "refresh_portfolio": True
+        }
+
+    # 2. LIQUIDATE ALL POSITIONS
+    if any(k in msg_lower for k in ["liquidate all", "sell all", "close all positions", "close all trades", "exit all", "sell everything"]):
+        sold = []
+        for sym, pos in list(practice_portfolio.positions.items()):
+            live_p = pos.get("current_price") or pos.get("entry_price") or 100.0
+            r = practice_portfolio.sell(sym, price=live_p, exit_reason="AI_COMMAND_LIQUIDATE_ALL")
+            sold.append(r)
+        return {
+            "type": "LIQUIDATE_ALL",
+            "summary": f"Liquidated all {len(sold)} practice positions.",
+            "details": sold,
+            "refresh_practice": True,
+            "refresh_portfolio": True
+        }
+
+    # 3. SET AI TRADING UNIVERSE / ALLOWED STOCKS
+    if ("ai" in msg_lower or "universe" in msg_lower or "trader" in msg_lower) and any(k in msg_lower for k in ["trade", "universe", "stocks", "assets"]):
+        if any(w in msg_lower for w in ["set", "make", "configure", "allow", "choose", "select", "restrict", "only", "add", "remove"]):
+            name_map = {
+                "apple": "AAPL", "nvidia": "NVDA", "gold": "XAU/USD", "bitcoin": "BTC/USD", "btc": "BTC/USD",
+                "ethereum": "ETH/USD", "eth": "ETH/USD", "reliance": "RELIANCE.NS", "tesla": "TSLA",
+                "microsoft": "MSFT", "google": "GOOGL", "amazon": "AMZN", "meta": "META",
+                "tcs": "TCS.NS", "hdfc": "HDFCBANK.NS", "icici": "ICICIBANK.NS", "infosys": "INFY.NS"
+            }
+            tokens = re.findall(r'[A-Za-z0-9_./-]+', msg)
+            found_symbols = []
+            for t in tokens:
+                tl = t.lower()
+                tu = t.upper()
+                if tl in name_map:
+                    found_symbols.append(name_map[tl])
+                elif tu in ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "AMD", "SPY", "QQQ", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS", "SBIN.NS", "LT.NS", "ITC.NS", "AXISBANK.NS", "SUNPHARMA.NS", "MARUTI.NS", "BTC/USD", "ETH/USD", "XAU/USD", "EUR/USD", "USD/INR"] or "/" in tu or tu.endswith((".NS", ".BO")):
+                    found_symbols.append(tu)
+
+            found_symbols = list(dict.fromkeys(found_symbols))
+            if found_symbols:
+                if "add" in msg_lower:
+                    for s in found_symbols:
+                        if s not in ai_trade_symbols:
+                            ai_trade_symbols.append(s)
+                elif "remove" in msg_lower or "delete" in msg_lower:
+                    ai_trade_symbols = [s for s in ai_trade_symbols if s not in found_symbols]
+                else:
+                    ai_trade_symbols = found_symbols
+
+                config["ai_trade_symbols"] = ai_trade_symbols
+                save_config(config)
+                return {
+                    "type": "SET_AI_SYMBOLS",
+                    "summary": f"Updated AI Trading Universe to {len(ai_trade_symbols)} assets: {', '.join(ai_trade_symbols)}",
+                    "symbols": ai_trade_symbols,
+                    "refresh_universe": True
+                }
+
+    # 4. TOGGLE AUTO TRADING
+    if any(k in msg_lower for k in ["pause auto", "pause ai", "stop auto", "stop ai", "disable auto", "disable ai trader"]):
+        ai_auto_trading_enabled = False
+        config["ai_auto_trading_enabled"] = False
+        save_config(config)
+        return {
+            "type": "TOGGLE_AUTO_TRADING",
+            "summary": "AI Autonomous Trading Engine paused.",
+            "enabled": False,
+            "refresh_portfolio": True
+        }
+    if any(k in msg_lower for k in ["resume auto", "start auto", "enable auto", "turn on auto", "activate auto"]):
+        ai_auto_trading_enabled = True
+        config["ai_auto_trading_enabled"] = True
+        save_config(config)
+        return {
+            "type": "TOGGLE_AUTO_TRADING",
+            "summary": "AI Autonomous Trading Engine activated.",
+            "enabled": True,
+            "refresh_portfolio": True
+        }
+
+    # 5. RUN AI SCAN
+    if any(k in msg_lower for k in ["run scan", "run ai scan", "scan now", "execute auto trade", "trigger auto trade"]):
+        eligible = [
+            r for sym, r in cached_results.items()
+            if not ai_trade_symbols or sym in ai_trade_symbols or any(s == sym for s in ai_trade_symbols)
+        ]
+        trade_res = portfolio.process_autonomous_signals(eligible, max_positions=4)
+        buys = len(trade_res.get("buys_executed", []))
+        sells = len(trade_res.get("sells_executed", []))
+        return {
+            "type": "RUN_AI_SCAN",
+            "summary": f"AI Autonomous scan executed: {buys} buys, {sells} exits processed.",
+            "details": trade_res,
+            "refresh_portfolio": True
+        }
+
+    # 6. BUY / LONG
+    buy_match = re.search(r'\b(buy|purchase|long|enter|open long)\b', msg_lower)
+    if buy_match:
+        target_sym = None
+        name_map = {
+            "apple": "AAPL", "nvidia": "NVDA", "gold": "XAU/USD", "bitcoin": "BTC/USD", "btc": "BTC/USD",
+            "ethereum": "ETH/USD", "eth": "ETH/USD", "reliance": "RELIANCE.NS", "tesla": "TSLA",
+            "microsoft": "MSFT", "google": "GOOGL", "amazon": "AMZN", "meta": "META"
+        }
+        for word in re.findall(r'[A-Za-z0-9_./-]+', msg):
+            wl = word.lower()
+            wu = word.upper()
+            if wl in name_map:
+                target_sym = name_map[wl]
+                break
+            if wu in ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "AMD", "SPY", "QQQ", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS", "SBIN.NS", "BTC/USD", "ETH/USD", "XAU/USD", "EUR/USD", "USD/INR"] or "/" in wu or wu.endswith((".NS", ".BO")):
+                target_sym = wu
+                break
+
+        if not target_sym:
+            target_sym = active_symbol or "NVDA"
+
+        amt_match = re.search(r'\$?([0-9]+(?:\.[0-9]+)?)\s*(?:dollars|\$|usd)?', msg)
+        amount = 250.0
+        if amt_match:
+            try:
+                parsed_amt = float(amt_match.group(1))
+                if 10.0 <= parsed_amt <= 1000.0:
+                    amount = parsed_amt
+            except Exception:
+                pass
+
+        curr_price = 0.0
+        currency = "INR" if target_sym.endswith((".NS", ".BO")) else "USD"
+        res_analysis = None
+        if target_sym in cached_results:
+            res_analysis = cached_results[target_sym]
+        else:
+            resolved = client.resolve_symbol(target_sym)
+            raw = client.get_full_analysis(resolved)
+            if raw and raw.get("analyst"):
+                res_analysis = strategy.analyze(raw)
+                cached_results[resolved] = res_analysis
+
+        if res_analysis:
+            curr_price = res_analysis.get("current_price", 0.0)
+            score = res_analysis.get("score", 75)
+            ex = res_analysis.get("execution", {})
+            sl = ex.get("stop_loss", round(curr_price * 0.95, 2))
+            tp1 = ex.get("take_profit_1", round(curr_price * 1.05, 2))
+        else:
+            curr_price = 100.0
+            score = 70
+            sl = round(curr_price * 0.95, 2)
+            tp1 = round(curr_price * 1.05, 2)
+
+        buy_res = practice_portfolio.buy(
+            symbol=target_sym,
+            price=curr_price,
+            allocation=amount,
+            stop_loss=sl,
+            take_profit_1=tp1,
+            score=score,
+            signal="AI_AGENTIC_BUY",
+            currency=currency
+        )
+
+        if buy_res.get("success"):
+            c_sign = "₹" if currency == "INR" else "$"
+            summary_msg = f"Executed BUY order: {buy_res['shares']} shares of {target_sym} for ${buy_res['invested']:.2f} at {c_sign}{curr_price:,.2f} (SL: {c_sign}{sl:,.2f}, TP1: {c_sign}{tp1:,.2f})."
+            return {
+                "type": "BUY",
+                "symbol": target_sym,
+                "shares": buy_res["shares"],
+                "invested": buy_res["invested"],
+                "price": curr_price,
+                "summary": summary_msg,
+                "refresh_practice": True,
+                "refresh_portfolio": True,
+                "switch_symbol": target_sym
+            }
+        else:
+            return {
+                "type": "BUY_FAILED",
+                "symbol": target_sym,
+                "summary": f"Could not execute BUY for {target_sym}: {buy_res.get('error', 'Unknown error')}",
+                "error": buy_res.get("error")
+            }
+
+    # 7. SELL / EXIT SPECIFIC SYMBOL
+    sell_match = re.search(r'\b(sell|exit|close|liquidate)\b', msg_lower)
+    if sell_match:
+        target_sym = None
+        name_map = {
+            "apple": "AAPL", "nvidia": "NVDA", "gold": "XAU/USD", "bitcoin": "BTC/USD", "btc": "BTC/USD",
+            "ethereum": "ETH/USD", "eth": "ETH/USD", "reliance": "RELIANCE.NS", "tesla": "TSLA",
+            "microsoft": "MSFT", "google": "GOOGL", "amazon": "AMZN", "meta": "META"
+        }
+        for word in re.findall(r'[A-Za-z0-9_./-]+', msg):
+            wl = word.lower()
+            wu = word.upper()
+            if wl in name_map:
+                target_sym = name_map[wl]
+                break
+            if wu in practice_portfolio.positions or wu in cached_results:
+                target_sym = wu
+                break
+
+        if not target_sym:
+            target_sym = active_symbol
+
+        if target_sym in practice_portfolio.positions:
+            pos = practice_portfolio.positions[target_sym]
+            live_p = pos.get("current_price") or pos.get("entry_price") or 100.0
+            sell_res = practice_portfolio.sell(target_sym, price=live_p, exit_reason="AI_COMMAND_EXIT")
+            if sell_res.get("success"):
+                sign = '+' if sell_res.get("pnl", 0) >= 0 else ''
+                summary_msg = f"Closed position in {target_sym} @ {live_p}: Realized P&L {sign}${sell_res.get('pnl', 0):.2f} ({sign}{sell_res.get('pnl_pct', 0):.2f}%)."
+                return {
+                    "type": "SELL",
+                    "symbol": target_sym,
+                    "summary": summary_msg,
+                    "pnl": sell_res.get("pnl"),
+                    "refresh_practice": True,
+                    "refresh_portfolio": True
+                }
+            else:
+                return {
+                    "type": "SELL_FAILED",
+                    "symbol": target_sym,
+                    "summary": f"Could not sell {target_sym}: {sell_res.get('error')}"
+                }
+        else:
+            return {
+                "type": "SELL_FAILED",
+                "symbol": target_sym,
+                "summary": f"No active practice position found for {target_sym} to sell."
+            }
+
+    return None
 
 class DashboardHandler(BaseHTTPRequestHandler):
     """Handles REST API and serves the dashboard HTML."""
@@ -3650,21 +5359,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/config":
             self.send_json(config)
 
-        elif path == "/api/analyze":
-            ticker = query.get("ticker", [""])[0]
-            tf = query.get("timeframe", ["1d"])[0].lower()
+        elif path in ["/api/analyze", "/api/chart-timing", "/api/timing"]:
+            ticker = query.get("ticker", query.get("symbol", [""]))[0]
+            tf = query.get("timeframe", query.get("tf", ["1d"]))[0].lower()
             if not ticker:
-                self.send_json({"error": "Missing ticker parameter"}, 400)
+                self.send_json({"error": "Missing ticker or symbol parameter"}, 400)
                 return
             resolved = client.resolve_symbol(ticker)
             raw = client.get_full_analysis(resolved, timeframe=tf)
-            if not raw or not raw.get("analyst"):
+            if not raw or (not raw.get("analyst") and not raw.get("technical")):
                 self.send_json({"error": f"Failed to fetch data for {resolved}"}, 404)
                 return
             result = strategy.analyze(raw)
             result["timeframe"] = tf
             cached_results[result["symbol"]] = result
-            self.send_json(result)
+            if path in ["/api/chart-timing", "/api/timing"]:
+                self.send_json({
+                    "symbol": result["symbol"],
+                    "name": result.get("name", result["symbol"]),
+                    "current_price": result.get("current_price", 0.0),
+                    "currency": result.get("currency", "USD"),
+                    "timeframe": tf,
+                    "score": result.get("score", 50),
+                    "signal": result.get("signal", "HOLD"),
+                    "timing": result.get("timing", {}),
+                    "execution": result.get("execution", {})
+                })
+            else:
+                self.send_json(result)
 
         elif path == "/api/scan":
             force = "force" in query
@@ -3730,11 +5452,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
             report = ai_assistant.generate_portfolio_report(summary)
             self.send_json(report)
 
+        elif path == "/api/ai-trader/symbols":
+            available_list = []
+            seen = set()
+            us_stocks = config.get("watchlist_us", ["NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "AMD", "SPY", "QQQ"])
+            for s in us_stocks:
+                if s not in seen:
+                    available_list.append({"symbol": s, "name": s, "market": "US", "price": cached_results.get(s, {}).get("current_price", 0.0)})
+                    seen.add(s)
+
+            in_stocks = config.get("watchlist_india", ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS", "SBIN.NS", "LT.NS", "ITC.NS", "AXISBANK.NS", "SUNPHARMA.NS", "MARUTI.NS"])
+            for s in in_stocks:
+                if s not in seen:
+                    available_list.append({"symbol": s, "name": s, "market": "IN", "price": cached_results.get(s, {}).get("current_price", 0.0)})
+                    seen.add(s)
+
+            commodities_crypto = ["XAU/USD", "BTC/USD", "ETH/USD", "EUR/USD", "USD/INR"]
+            for s in commodities_crypto:
+                if s not in seen:
+                    available_list.append({"symbol": s, "name": s, "market": "CRYPTO_COMMODITY", "price": cached_results.get(s, {}).get("current_price", 0.0)})
+                    seen.add(s)
+
+            for s in ai_trade_symbols:
+                if s not in seen:
+                    available_list.append({"symbol": s, "name": s, "market": "CUSTOM", "price": cached_results.get(s, {}).get("current_price", 0.0)})
+                    seen.add(s)
+
+            self.send_json({
+                "selected": ai_trade_symbols,
+                "all_available": available_list,
+                "enabled": ai_auto_trading_enabled
+            })
+
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        global ai_trade_symbols, ai_auto_trading_enabled
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         content_length = int(self.headers.get("Content-Length", 0))
@@ -3872,6 +5627,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             report = ai_assistant.generate_portfolio_report(summary)
             self.send_json(report)
 
+        elif path == "/api/ai-trader/symbols":
+            symbols = payload.get("symbols", [])
+            enabled = payload.get("enabled", ai_auto_trading_enabled)
+            cleaned_syms = list(dict.fromkeys([s.strip().upper() for s in symbols if s.strip()]))
+            ai_trade_symbols = cleaned_syms
+            ai_auto_trading_enabled = bool(enabled)
+            config["ai_trade_symbols"] = ai_trade_symbols
+            config["ai_auto_trading_enabled"] = ai_auto_trading_enabled
+            save_config(config)
+            self.send_json({
+                "success": True,
+                "selected": ai_trade_symbols,
+                "enabled": ai_auto_trading_enabled,
+                "count": len(ai_trade_symbols)
+            })
+
         elif path == "/api/chat":
             message = payload.get("message", "").strip()
             symbol = payload.get("symbol", "")
@@ -3895,7 +5666,66 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             stock_ctx = strategy.analyze(raw)
                             cached_results[resolved] = stock_ctx
 
-            res = ai_assistant.chat(message, stock_context=stock_ctx, history=history)
+            # 1. Deterministic System Action Execution
+            action_executed = execute_agentic_system_command(message, active_symbol=symbol or "NVDA")
+            action_receipt = action_executed.get("summary") if action_executed else None
+
+            # Build real-time live system state for AI full awareness
+            live_prices = {k: v.get("current_price", 0.0) for k, v in cached_results.items() if v.get("current_price")}
+            active_viewed_sym = payload.get("active_symbol") or symbol or "NVDA"
+            active_tf = payload.get("timeframe", "1m").lower()
+
+            chart_timing = None
+            if stock_ctx and stock_ctx.get("timing"):
+                chart_timing = stock_ctx.get("timing")
+            else:
+                resolved_viewed = client.resolve_symbol(active_viewed_sym)
+                if resolved_viewed in cached_results and cached_results[resolved_viewed].get("timing") and cached_results[resolved_viewed].get("timeframe") == active_tf:
+                    chart_timing = cached_results[resolved_viewed].get("timing")
+                else:
+                    raw_viewed = client.get_full_analysis(resolved_viewed, timeframe=active_tf)
+                    if raw_viewed:
+                        analyzed_viewed = strategy.analyze(raw_viewed)
+                        analyzed_viewed["timeframe"] = active_tf
+                        cached_results[resolved_viewed] = analyzed_viewed
+                        chart_timing = analyzed_viewed.get("timing")
+                        if not stock_ctx:
+                            stock_ctx = analyzed_viewed
+
+            system_state = {
+                "practice_portfolio": practice_portfolio.get_summary(live_prices),
+                "ai_fund": portfolio.get_summary(),
+                "ai_trade_symbols": ai_trade_symbols,
+                "ai_auto_trading_enabled": ai_auto_trading_enabled,
+                "current_chart_symbol": active_viewed_sym,
+                "chart_timing": chart_timing
+            }
+
+            # 2. Call AI Assistant with action receipt and system state
+            res = ai_assistant.chat(message, stock_context=stock_ctx, history=history, action_receipt=action_receipt, system_state=system_state)
+
+            # 3. If no deterministic action executed yet, check if LLM produced [ACTION: ...]
+            if not action_executed and res.get("reply"):
+                raw_reply = res["reply"]
+                action_match = re.search(r'\[ACTION:\s*(\{.*?\})\]', raw_reply, re.DOTALL)
+                if action_match:
+                    try:
+                        act_dict = json.loads(action_match.group(1))
+                        action_executed = execute_action_dict(act_dict, active_symbol=symbol or "NVDA")
+                        res["reply"] = raw_reply.replace(action_match.group(0), "").strip()
+                    except Exception as e:
+                        print(f"[ACTION PARSE ERROR] {e}")
+
+            if action_executed:
+                res["action_executed"] = action_executed
+                clean_reply = re.sub(r'\[ACTION:\s*\{.*?\}\]', '', res.get("reply", ""), flags=re.DOTALL).strip()
+                clean_reply = re.sub(r'<think>.*?</think>', '', clean_reply, flags=re.DOTALL).strip()
+                if not clean_reply or res.get("error") or len(clean_reply) < 15 or clean_reply.lower().startswith("we need to") or clean_reply.lower().startswith("i need to"):
+                    res["reply"] = f"⚡ **System Action Executed:** {action_executed.get('summary')}"
+                else:
+                    res["reply"] = clean_reply
+                res["error"] = False
+
             self.send_json(res)
 
         elif path == "/api/webhook":

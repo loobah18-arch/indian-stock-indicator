@@ -2,6 +2,7 @@
   "discord_webhook_url": "",
   "enable_termux_notification": true,
   "auto_monitor_enabled": true,
+  "ai_auto_trading_enabled": true,
   "min_upside_for_buy_pct": 5.0,
   "rsi_overbought": 72.0,
   "rsi_oversold": 30.0,
@@ -36,5 +37,10 @@
     "BUY",
     "STRONG SELL",
     "SELL"
+  ],
+  "ai_trade_symbols": [
+    "NVDA",
+    "TSLA",
+    "BTC/USD"
   ]
 }

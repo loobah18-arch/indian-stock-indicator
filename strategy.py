@@ -1,4 +1,14 @@
+import time
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def fmt_ist(ts: float, fmt: str = "%H:%M:%S IST") -> str:
+    return datetime.fromtimestamp(ts, tz=IST).strftime(fmt)
+
+def fmt_ist_full(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
 class IndicatorStrategy:
     """Quantitative 5-Pillar Confluence Engine for high-precision stock signals."""
@@ -345,4 +355,166 @@ class IndicatorStrategy:
                 "sparkline": sparkline,
             },
             "rationale": " ".join(notes),
+            "timing": self.compute_chart_timing(
+                tech=tech,
+                signal=signal,
+                score=total_score,
+                current_price=current_price,
+                timeframe=data.get("timeframe", tech.get("timeframe", "1d")),
+                currency=currency
+            )
+        }
+
+    def compute_chart_timing(
+        self,
+        tech: Dict[str, Any],
+        signal: str,
+        score: int,
+        current_price: float,
+        timeframe: str = "1d",
+        currency: str = "USD"
+    ) -> Dict[str, Any]:
+        """Pinpoints the exact candle trigger timestamp, execution window, and seconds countdown to next bar."""
+        now = int(time.time())
+        timestamps = tech.get("timestamps", [])
+        candle_sec = tech.get("candle_interval_sec") or {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "60m": 3600, "1h": 3600, "1d": 86400, "1w": 604800}.get(timeframe.lower(), 60)
+        latest_ts = tech.get("latest_timestamp") or (timestamps[-1] if timestamps else now)
+        next_candle_ts = latest_ts + candle_sec
+
+        if abs(now - latest_ts) <= candle_sec * 3:
+            seconds_remaining = max(0, next_candle_ts - now)
+        else:
+            live_boundary = (now // candle_sec) * candle_sec
+            seconds_remaining = max(0, (live_boundary + candle_sec) - now)
+
+        recent_closes = tech.get("recent_closes", [])
+        recent_ema9 = tech.get("recent_ema9", [])
+        recent_ema21 = tech.get("recent_ema21", [])
+        recent_macd = tech.get("recent_macd", [])
+        recent_macd_sig = tech.get("recent_macd_sig", [])
+
+        trigger_ts = latest_ts
+        trigger_reason = ""
+        trigger_type = "TREND_CONTINUATION"
+
+        n = min(len(recent_closes), len(recent_ema9), len(recent_ema21), len(timestamps))
+        found_event = False
+
+        if n >= 2:
+            if "BUY" in signal:
+                for idx in range(n - 1, 0, -1):
+                    ts_bar = timestamps[idx]
+                    if recent_ema9[idx] >= recent_ema21[idx] and recent_ema9[idx-1] < recent_ema21[idx-1]:
+                        trigger_ts = ts_bar
+                        trigger_reason = f"Bullish Crossover: 9 EMA crossed above 21 EMA at {fmt_ist(ts_bar)} (Price: {recent_closes[idx]})"
+                        trigger_type = "EMA_BULLISH_CROSS"
+                        found_event = True
+                        break
+                    elif len(recent_macd) > idx and len(recent_macd_sig) > idx:
+                        if recent_macd[idx] >= recent_macd_sig[idx] and recent_macd[idx-1] < recent_macd_sig[idx-1]:
+                            trigger_ts = ts_bar
+                            trigger_reason = f"MACD Bullish Cross: Momentum flipped positive at {fmt_ist(ts_bar)}"
+                            trigger_type = "MACD_BULLISH_CROSS"
+                            found_event = True
+                            break
+                if not found_event:
+                    trigger_reason = f"Bullish Accumulation: Price holding firmly above 9 EMA with high confluence score ({score}/100)"
+                    trigger_type = "BULLISH_MOMENTUM"
+
+            elif "SELL" in signal:
+                for idx in range(n - 1, 0, -1):
+                    ts_bar = timestamps[idx]
+                    if recent_ema9[idx] <= recent_ema21[idx] and recent_ema9[idx-1] > recent_ema21[idx-1]:
+                        trigger_ts = ts_bar
+                        trigger_reason = f"Bearish Breakdown: 9 EMA fell below 21 EMA at {fmt_ist(ts_bar)} (Price: {recent_closes[idx]})"
+                        trigger_type = "EMA_BEARISH_CROSS"
+                        found_event = True
+                        break
+                    elif len(recent_macd) > idx and len(recent_macd_sig) > idx:
+                        if recent_macd[idx] <= recent_macd_sig[idx] and recent_macd[idx-1] > recent_macd_sig[idx-1]:
+                            trigger_ts = ts_bar
+                            trigger_reason = f"MACD Bearish Cross: Momentum turned negative at {fmt_ist(ts_bar)}"
+                            trigger_type = "MACD_BEARISH_CROSS"
+                            found_event = True
+                            break
+                if not found_event:
+                    trigger_reason = f"Bearish Pressure: Downward momentum dominant with low confluence score ({score}/100)"
+                    trigger_type = "BEARISH_MOMENTUM"
+
+            else:
+                trigger_reason = f"Consolidation / Rangebound: Score {score}/100. Price compressing between EMAs. Awaiting breakout."
+                trigger_type = "CONSOLIDATION"
+        else:
+            if "BUY" in signal:
+                trigger_reason = f"Bullish setup: Confluence Score {score}/100"
+                trigger_type = "BULLISH_MOMENTUM"
+            elif "SELL" in signal:
+                trigger_reason = f"Bearish setup: Confluence Score {score}/100"
+                trigger_type = "BEARISH_MOMENTUM"
+            else:
+                trigger_reason = f"Consolidation: Confluence Score {score}/100"
+                trigger_type = "CONSOLIDATION"
+
+        is_buy = "BUY" in signal
+        is_sell = "SELL" in signal
+
+        if is_buy:
+            action = "BUY"
+            action_label = "▲ PERFECT TIME TO BUY (UP)"
+            action_color = "#10b981"
+            timing_status = "CONFIRMED_BUY_WINDOW"
+            confidence_pct = min(98, max(65, score + 10))
+            instruction = f"🟢 Confirmed BUY signal at {fmt_ist(trigger_ts)}. Open UP trade now or on the next candle open."
+        elif is_sell:
+            action = "SELL"
+            action_label = "▼ PERFECT TIME TO SELL (DOWN)"
+            action_color = "#ef4444"
+            timing_status = "CONFIRMED_SELL_WINDOW"
+            confidence_pct = min(95, max(60, 100 - score + 5))
+            instruction = f"🔴 Confirmed SELL signal at {fmt_ist(trigger_ts)}. Open DOWN trade or exit long to preserve gains."
+        else:
+            action = "WAIT"
+            action_label = "⏳ MONITORING (WAIT FOR SETUP)"
+            action_color = "#60a5fa"
+            timing_status = "MONITORING_CONSOLIDATION"
+            confidence_pct = 50
+            instruction = f"⏳ Neutral consolidation. Do not open positions prematurely. Monitor next candle close."
+
+        trigger_time_ist = fmt_ist_full(trigger_ts)
+        trigger_time_short = fmt_ist(trigger_ts)
+        next_candle_time_ist = fmt_ist_full(next_candle_ts)
+        next_candle_time_short = fmt_ist(next_candle_ts)
+
+        # Retain UTC strings for backward compatibility
+        trigger_time_utc = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(trigger_ts))
+        next_candle_time_utc = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(next_candle_ts))
+
+        window_end_ts = trigger_ts + (candle_sec * 3)
+        optimal_window_str = f"{trigger_time_short} – {fmt_ist(window_end_ts)}"
+
+        return {
+            "action": action,
+            "action_label": action_label,
+            "action_color": action_color,
+            "timing_status": timing_status,
+            "timeframe": timeframe,
+            "interval_seconds": candle_sec,
+            "trigger_timestamp": trigger_ts,
+            "trigger_time": trigger_time_ist,
+            "trigger_time_ist": trigger_time_ist,
+            "trigger_time_short": trigger_time_short,
+            "trigger_time_utc": trigger_time_utc,
+            "next_candle_timestamp": next_candle_ts,
+            "next_candle_time": next_candle_time_ist,
+            "next_candle_time_ist": next_candle_time_ist,
+            "next_candle_time_short": next_candle_time_short,
+            "next_candle_time_utc": next_candle_time_utc,
+            "seconds_to_next_bar": seconds_remaining,
+            "optimal_window": optimal_window_str,
+            "confidence_pct": confidence_pct,
+            "trigger_type": trigger_type,
+            "trigger_reason": trigger_reason,
+            "instruction": instruction,
+            "confluence_score": score,
+            "suggested_duration": timeframe,
         }

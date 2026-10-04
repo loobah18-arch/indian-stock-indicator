@@ -9,8 +9,10 @@ entry/exit execution prices, P&L outcomes, and current active holdings.
 import os
 import sys
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from market_client import MarketClient
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
 
@@ -110,12 +112,12 @@ def generate_report() -> str:
     total_net_pnl = round(total_equity - starting_balance, 2)
     total_return_pct = round((total_net_pnl / starting_balance) * 100, 2)
 
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
     # Generate Markdown Report
     lines = []
     lines.append(f"# 📊 AI Autonomous Trading 1-Hour Verification Audit Report")
-    lines.append(f"**Report Generated At:** `{now_utc}` | **Evaluation Window:** 1 Hour Live Forward-Test")
+    lines.append(f"**Report Generated At:** `{now_ist}` | **Evaluation Window:** 1 Hour Live Forward-Test")
     lines.append(f"**Starting Capital:** `${starting_balance:,.2f}` | **Current Fund Equity:** `${total_equity:,.2f}` | **Net Return:** `+{total_return_pct:.2f}%` (`+${total_net_pnl:.2f}`)")
     lines.append("")
     lines.append("---")

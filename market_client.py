@@ -294,14 +294,16 @@ class MarketClient:
             raw_lows = quote.get("low", [])
             raw_volumes = quote.get("volume", [])
 
+            timestamps = result[0].get("timestamp", [])
             records = []
             for i in range(len(raw_closes)):
                 c = raw_closes[i]
                 h = raw_highs[i] if i < len(raw_highs) else None
                 l = raw_lows[i] if i < len(raw_lows) else None
                 v = raw_volumes[i] if i < len(raw_volumes) else 0
+                t = timestamps[i] if (timestamps and i < len(timestamps)) else None
                 if c is not None and h is not None and l is not None:
-                    records.append({"close": c, "high": h, "low": l, "volume": v or 0})
+                    records.append({"close": c, "high": h, "low": l, "volume": v or 0, "timestamp": t})
 
             if len(records) < 20:
                 return None
@@ -404,6 +406,16 @@ class MarketClient:
                 "dist_from_52w_high_pct": dist_from_52w_high_pct,
                 "sparkline": sparkline,
                 "timeframe": tf,
+                "timestamps": [r["timestamp"] for r in records if r.get("timestamp") is not None][-30:],
+                "latest_timestamp": ([r["timestamp"] for r in records if r.get("timestamp") is not None] or [int(time.time())])[-1],
+                "candle_interval_sec": {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "60m": 3600, "1h": 3600, "1d": 86400, "1w": 604800}.get(tf, 60),
+                "recent_closes": [round(c, 2) for c in closes[-30:]],
+                "recent_highs": [round(h, 2) for h in highs[-30:]],
+                "recent_lows": [round(l, 2) for l in lows[-30:]],
+                "recent_ema9": [round(e, 2) for e in ema9_series[-30:]],
+                "recent_ema21": [round(e, 2) for e in ema21_series[-30:]],
+                "recent_macd": [round(m, 2) for m in macd_series[-30:]],
+                "recent_macd_sig": [round(s, 2) for s in signal_series[-30:]],
             }
         except Exception:
             return None
@@ -520,7 +532,7 @@ class MarketClient:
             "bullish_ratio": f"{bullish_count}/{total_eval}",
             "guidance": guidance,
             "indices": indices,
-            "updated_at": time.strftime("%H:%M:%S UTC", time.gmtime(now))
+            "updated_at": time.strftime("%H:%M:%S IST", time.gmtime(now + 19800))
         }
 
         self._market_cache[market] = {"data": overview, "timestamp": now}

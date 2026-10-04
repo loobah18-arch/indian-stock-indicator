@@ -1,15 +1,16 @@
 import os
+import re
 import requests
 from typing import Dict, Any, List, Optional
 
 FREE_MODELS = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "qwen/qwen3.8-27b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
     "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "google/gemma-4-26b-a4b-it:free",
     "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ]
 
 def find_api_key() -> str:
@@ -44,7 +45,7 @@ class AIAssistant:
     def __init__(self):
         self.api_key = find_api_key()
 
-    def build_system_prompt(self, stock_context: Optional[Dict[str, Any]] = None) -> str:
+    def build_system_prompt(self, stock_context: Optional[Dict[str, Any]] = None, system_state: Optional[Dict[str, Any]] = None) -> str:
         prompt = (
             "You are 'AlphaQuant AI', an institutional quantitative market strategist and technical analyst assistant "
             "specializing in both US Markets (NASDAQ/NYSE/S&P500) and Indian Markets (NSE/BSE).\n"
@@ -103,6 +104,82 @@ class AIAssistant:
                 f"When answering, directly reference these live levels if the user asks about this asset.\n"
             )
 
+        if system_state:
+            prac = system_state.get("practice_portfolio", {})
+            fund = system_state.get("ai_fund", {})
+            ai_syms = system_state.get("ai_trade_symbols", [])
+            auto_active = system_state.get("ai_auto_trading_enabled", True)
+
+            p_cash = prac.get("cash", 1000.0)
+            p_equity = prac.get("total_equity", 1000.0)
+            p_pnl = prac.get("total_pnl", 0.0)
+            p_pnl_pct = prac.get("total_pnl_pct", 0.0)
+            p_positions = prac.get("positions", [])
+            p_pos_desc = []
+            for p in p_positions:
+                c_sign = "₹" if p.get("currency") == "INR" or str(p.get("symbol", "")).endswith((".NS", ".BO")) else "$"
+                p_pos_desc.append(f"{p['symbol']} ({p['shares']} shares @ {c_sign}{p['entry_price']:.2f}, current {c_sign}{p['current_price']:.2f}, unrealized P&L: ${p['unrealized_pnl']:+,.2f})")
+            p_pos_str = "; ".join(p_pos_desc) if p_pos_desc else "None (100% Cash / No open trades)"
+
+            f_equity = fund.get("total_equity", 1000.0)
+            f_pnl = fund.get("realized_pnl", 0.0)
+            f_win = fund.get("win_rate_pct", 0.0)
+            f_trades = fund.get("total_trades", 0)
+
+            prompt += (
+                f"\n--- REAL-TIME PLATFORM LIVE SYSTEM ACCESS & STATUS ---\n"
+                f"• Practice Trading Sandbox: Available Cash=${p_cash:,.2f} | Total Account Equity=${p_equity:,.2f} | Net P&L=${p_pnl:+,.2f} ({p_pnl_pct:+,.2f}%)\n"
+                f"• Practice Open Positions: {p_pos_str}\n"
+                f"• Autonomous AI Fund: Equity=${f_equity:,.2f} | Realized P&L=${f_pnl:+,.2f} | Closed Trades={f_trades} | Win Rate={f_win:.1f}%\n"
+                f"• Allowed AI Stock Universe: {', '.join(ai_syms) if ai_syms else 'All'}\n"
+                f"• Auto-Trading Status: {'ACTIVE (ON)' if auto_active else 'PAUSED (OFF)'}\n"
+                f"--------------------------------------------------------\n"
+                f"You have live awareness of all these metrics and can directly answer any questions about the user's balance, "
+                f"holdings, trade counts, P&L, or AI universe, as well as execute trades and adjustments for them.\n"
+            )
+
+            timing = system_state.get("chart_timing")
+            chart_sym = system_state.get("current_chart_symbol", "")
+            if timing:
+                prompt += (
+                    f"\n--- ACTIVE CHART TIMING & PERFECT TIMESTAMP RADAR (IST) ---\n"
+                    f"Viewed Asset: {chart_sym} | Timeframe: {timing.get('timeframe', '1m')}\n"
+                    f"Action Recommendation: {timing.get('action_label', timing.get('action'))}\n"
+                    f"Confluence Score: {timing.get('confluence_score')}/100 | Status: {timing.get('timing_status')}\n"
+                    f"Confirmed Signal Trigger Timestamp (IST): {timing.get('trigger_time_ist', timing.get('trigger_time_utc'))} ({timing.get('trigger_type')})\n"
+                    f"Optimal Execution Window (IST): {timing.get('optimal_window')}\n"
+                    f"Next Candle Close Timestamp (IST): {timing.get('next_candle_time_ist', timing.get('next_candle_time_utc'))} (T-minus {timing.get('seconds_to_next_bar')}s)\n"
+                    f"Technical Confluence Rationale: {timing.get('trigger_reason')}\n"
+                    f"Guidance: {timing.get('instruction')}\n"
+                    f"------------------------------------------------------\n"
+                    f"Note: All timestamps are in Indian Standard Time (IST). When the user asks when to buy or sell, what the perfect timestamp is, or asks you to analyze the chart they are seeing, "
+                    f"cite these exact IST timestamps, optimal entry/exit window, candle countdown, and technical trigger reasons directly.\n"
+                )
+
+        prompt += (
+            "\n--- AUTONOMOUS SYSTEM PRIVILEGES & FUNCTION EXECUTION ---\n"
+            "You have DIRECT SYSTEM EXECUTION ACCESS across this quantitative trading platform. "
+            "You are NOT just a conversational bot — if the user instructs you to perform any trading, universe configuration, "
+            "or system control task, you have the full authority and access to execute it directly!\n"
+            "Supported System Actions you can invoke:\n"
+            "1. BUY / LONG: When instructed to buy, invest in, or open a position:\n"
+            "   [ACTION: {\"type\": \"BUY\", \"symbol\": \"<TICKER>\", \"amount\": <DOLLARS>}]\n"
+            "2. SELL / EXIT: When instructed to sell, exit, close, or liquidate a position:\n"
+            "   [ACTION: {\"type\": \"SELL\", \"symbol\": \"<TICKER>\"}]\n"
+            "3. LIQUIDATE ALL: When instructed to close/sell all active positions:\n"
+            "   [ACTION: {\"type\": \"LIQUIDATE_ALL\"}]\n"
+            "4. RESET PRACTICE: When instructed to reset practice balance / refill demo credits:\n"
+            "   [ACTION: {\"type\": \"RESET_PRACTICE\"}]\n"
+            "5. SET AI TRADING UNIVERSE: When instructed which stocks the AI auto-trader should trade on:\n"
+            "   [ACTION: {\"type\": \"SET_AI_SYMBOLS\", \"symbols\": [\"<SYM1>\", \"<SYM2>\"]}]\n"
+            "6. TOGGLE AUTO TRADING: When instructed to pause, stop, resume, or start auto trading:\n"
+            "   [ACTION: {\"type\": \"TOGGLE_AUTO_TRADING\", \"enabled\": true|false}]\n"
+            "7. RUN AI SCAN: When instructed to run an autonomous scan cycle:\n"
+            "   [ACTION: {\"type\": \"RUN_AI_SCAN\"}]\n"
+            "\n"
+            "Always be decisive, highly competent, professional, and confirm exact numbers and levels.\n"
+        )
+
         return prompt
 
     def _call_llm(self, messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.3) -> Dict[str, Any]:
@@ -133,13 +210,14 @@ class AIAssistant:
                 "temperature": temperature
             }
             try:
-                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=16)
+                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=8)
                 if resp.status_code == 200:
                     data = resp.json()
                     choices = data.get("choices", [])
                     if choices and choices[0].get("message", {}).get("content"):
                         reply = choices[0]["message"]["content"].strip()
-                        if len(reply) > 25 and not reply.lower().startswith("user safety:"):
+                        reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
+                        if len(reply) > 20 and not reply.lower().startswith("user safety:"):
                             return {
                                 "reply": reply,
                                 "model": model,
@@ -161,15 +239,17 @@ class AIAssistant:
             "error": True
         }
 
-    def chat(self, user_message: str, stock_context: Optional[Dict[str, Any]] = None, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    def chat(self, user_message: str, stock_context: Optional[Dict[str, Any]] = None, history: Optional[List[Dict[str, str]]] = None, action_receipt: Optional[str] = None, system_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Sends chat request to OpenRouter free models with automatic multi-model fallback."""
-        messages = [{"role": "system", "content": self.build_system_prompt(stock_context)}]
+        messages = [{"role": "system", "content": self.build_system_prompt(stock_context, system_state=system_state)}]
         if history:
             for h in history[-6:]:
                 if h.get("role") in ["user", "assistant"] and h.get("content"):
                     messages.append({"role": h["role"], "content": h["content"]})
 
         messages.append({"role": "user", "content": user_message})
+        if action_receipt:
+            messages.append({"role": "system", "content": f"SYSTEM EXECUTION RECEIPT: {action_receipt}. Confirm this execution clearly to the user, state the exact price and risk levels, and outline the technical outlook."})
         return self._call_llm(messages, max_tokens=500, temperature=0.4)
 
     def generate_portfolio_report(self, summary: Dict[str, Any]) -> Dict[str, Any]:
